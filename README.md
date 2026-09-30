@@ -70,11 +70,30 @@ scripts/install.sh          # builds and installs to ~/.local/bin/seekr
 
 Then run `seekr`. If your shell cannot find it, add `~/.local/bin` to your `PATH`; the
 script prints how. To install somewhere else, use `PREFIX=/usr/local sudo -E scripts/install.sh`.
-To remove seekr, run `scripts/uninstall.sh`. It deletes the binary, your login and
-settings, the download list, the cache and the logs after one confirmation (`-y`
-skips it). Downloaded music is never touched.
-
 Alternatively: `cargo install --git https://github.com/DarkAaronfox/seekr seekr`.
+
+### Uninstall
+
+```sh
+cd seekr
+scripts/uninstall.sh        # asks once, then removes everything
+scripts/uninstall.sh -y     # same, without the question
+```
+
+This removes seekr completely:
+
+| Removed | Path |
+|---|---|
+| the program | `~/.local/bin/seekr` (or `$PREFIX/bin/seekr`) |
+| login and settings | `~/.config/seekr/` |
+| download list | `~/.local/share/seekr/` |
+| share cache | `~/.cache/seekr/` |
+| logs | `~/.local/state/seekr/` |
+
+Your downloaded music is **never** touched. The saved Soulseek password is deleted
+too, and Soulseek has no password reset, so keep a note of it if you want to use the
+account again. If you installed with `cargo install`, use `cargo uninstall seekr` for
+the binary and the script for the rest.
 
 ### AUR
 
