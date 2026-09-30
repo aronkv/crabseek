@@ -64,6 +64,11 @@ impl Actor {
             return;
         }
         tracing::debug!(%username, %query, results = files.len(), "answering search");
+        self.emit(Event::SearchAnswered {
+            username: username.clone(),
+            query: query.clone(),
+            results: files.len(),
+        });
         let response = SearchResponse {
             username: self.own_username.clone(),
             token,

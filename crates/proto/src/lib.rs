@@ -2,6 +2,7 @@
 //!
 //! Reference: `docs/SLSKPROTOCOL.md` (Nicotine+ protocol documentation).
 
+pub mod distrib;
 pub mod frame;
 pub mod peer;
 pub mod peer_init;

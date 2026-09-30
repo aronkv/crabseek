@@ -289,6 +289,12 @@ fn print_event(event: &Event) -> bool {
                 println!("  warning: {e}");
             }
         }
+        Event::Distrib(status) => println!("distributed network: {status:?}"),
+        Event::SearchAnswered {
+            username,
+            query,
+            results,
+        } => println!("[{username}] searched {query:?}: answered with {results} files"),
         Event::ServerMessage(_) | Event::ListenPort { .. } | Event::SharesScanning => {}
         Event::ServerClosed { reason } => {
             println!("server connection closed: {reason}");

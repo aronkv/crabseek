@@ -2,6 +2,7 @@
 //! peer connection. Callers talk to it through [`Client`] and receive
 //! [`Event`]s.
 
+mod distrib;
 mod downloads;
 mod sharing;
 mod uploads;
@@ -15,6 +16,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
 use seekr_proto::ConnectionType;
+use seekr_proto::distrib::DistribMsg;
 use seekr_proto::peer::{PeerMsg, UserInfo};
 use seekr_proto::peer_init::PeerInitMsg;
 use seekr_proto::search::SearchResponse;
@@ -27,6 +29,8 @@ use crate::peer::{self, ConnId, PeerHandle};
 use crate::server::{self, LoginError, LoginInfo, ServerConnection, ServerReader, ServerWriter};
 use crate::shares::ShareIndex;
 
+use distrib::Distrib;
+pub use distrib::DistribStatus;
 use downloads::Download;
 pub use downloads::{DownloadId, DownloadState};
 use uploads::Upload;
@@ -119,6 +123,14 @@ pub enum Event {
         /// Shared folders that could not be read.
         errors: Vec<String>,
     },
+    /// Our place in the distributed search network changed.
+    Distrib(DistribStatus),
+    /// We answered someone's search with `results` files.
+    SearchAnswered {
+        username: String,
+        query: String,
+        results: usize,
+    },
     /// Outcome of [`Client::set_listen_port`].
     ListenPort {
         port: u16,
@@ -158,6 +170,9 @@ impl Client {
         })
         .await?;
         conn.send(&ServerRequest::SetStatus { status: 2 }).await?;
+        // Join the distributed network as a child only.
+        conn.send(&ServerRequest::HaveNoParent(true)).await?;
+        conn.send(&ServerRequest::AcceptChildren(false)).await?;
         let (server_reader, server_writer) = conn.split();
 
         let (tx, rx) = mpsc::unbounded_channel();
@@ -203,6 +218,7 @@ impl Client {
                 next_upload_id: 0,
                 upload_slots: cfg.upload_slots.max(1),
                 upload_speed: 0,
+                distrib: Distrib::default(),
             }
             .run(rx),
         );
@@ -391,6 +407,16 @@ pub(crate) enum Internal {
         id: UploadId,
         result: io::Result<(u64, Duration)>,
     },
+    DistribMessage {
+        id: ConnId,
+        username: String,
+        msg: DistribMsg,
+    },
+    DistribClosed {
+        id: ConnId,
+        username: String,
+        reason: String,
+    },
     /// An `F` connection whose `FileTransferInit` has been read.
     FileConnection {
         username: String,
@@ -446,6 +472,8 @@ enum Purpose {
     Peer,
     /// The `F` connection of one of our uploads.
     Upload(UploadId),
+    /// A `D` connection to a possible distributed parent.
+    ParentCandidate,
 }
 
 /// An outgoing connection attempt, keyed by the token we sent in
@@ -489,6 +517,7 @@ struct Actor {
     upload_slots: usize,
     /// Speed of our last finished upload, reported in search results.
     upload_speed: u32,
+    distrib: Distrib,
 }
 
 impl Actor {
@@ -525,6 +554,14 @@ impl Actor {
                 }
                 Internal::UploadProgress { id, sent } => self.on_upload_progress(id, sent),
                 Internal::UploadDone { id, result } => self.on_upload_done(id, result).await,
+                Internal::DistribMessage { id, username, msg } => {
+                    self.on_distrib_message(id, username, msg).await
+                }
+                Internal::DistribClosed {
+                    id,
+                    username,
+                    reason,
+                } => self.on_distrib_closed(id, username, reason).await,
                 Internal::FileConnection {
                     username,
                     token,
@@ -643,6 +680,44 @@ impl Actor {
         conn_type: ConnectionType,
         purpose: Purpose,
     ) {
+        let token = self
+            .begin_connect(username.clone(), conn_type, purpose)
+            .await;
+        self.awaiting_address
+            .entry(username.clone())
+            .or_default()
+            .push(token);
+        self.send_server(ServerRequest::GetPeerAddress { username })
+            .await;
+    }
+
+    /// Like [`Self::start_connect`] when the address is already known
+    /// (from `PossibleParents`).
+    async fn start_connect_known(
+        &mut self,
+        username: String,
+        ip: Ipv4Addr,
+        port: u32,
+        conn_type: ConnectionType,
+        purpose: Purpose,
+    ) {
+        let token = self.begin_connect(username, conn_type, purpose).await;
+        let addrs = self.peer_addrs(ip, port);
+        let (own, tx) = (self.own_username.clone(), self.internal.clone());
+        tokio::spawn(async move {
+            let result = connect::direct(&addrs, &own, conn_type).await;
+            let _ = tx.send(Internal::DirectDone { token, result });
+        });
+    }
+
+    /// Registers the attempt and sends the indirect request; returns the
+    /// token.
+    async fn begin_connect(
+        &mut self,
+        username: String,
+        conn_type: ConnectionType,
+        purpose: Purpose,
+    ) -> u32 {
         let token = self.tokens.next();
         self.pending.insert(
             token,
@@ -654,24 +729,18 @@ impl Actor {
                 indirect_failed: false,
             },
         );
-        self.awaiting_address
-            .entry(username.clone())
-            .or_default()
-            .push(token);
         self.send_server(ServerRequest::ConnectToPeer {
             token,
-            username: username.clone(),
+            username,
             conn_type,
         })
         .await;
-        self.send_server(ServerRequest::GetPeerAddress { username })
-            .await;
-
         let tx = self.internal.clone();
         tokio::spawn(async move {
             tokio::time::sleep(PENDING_TIMEOUT).await;
             let _ = tx.send(Internal::PendingTimeout { token });
         });
+        token
     }
 
     fn peer_addrs(&self, ip: Ipv4Addr, port: u32) -> Vec<SocketAddr> {
@@ -733,6 +802,11 @@ impl Actor {
                 token,
                 query,
             } => self.on_search_request(username, token, query).await,
+            ServerResponse::PossibleParents(parents) => self.on_possible_parents(parents).await,
+            ServerResponse::EmbeddedMessage { code, payload } => {
+                self.on_embedded_message(code, payload).await
+            }
+            ServerResponse::ResetDistributed => self.reset_distributed().await,
             other => self.emit(Event::ServerMessage(other)),
         }
     }
@@ -762,8 +836,9 @@ impl Actor {
         match conn_type {
             ConnectionType::Peer => self.register_peer(username, stream, ConnectMethod::Inbound),
             ConnectionType::File => self.on_file_connection(username, stream),
+            // We do not accept distributed children yet.
             ConnectionType::Distributed => {
-                tracing::debug!(%username, "ignoring distributed connection (not implemented)")
+                tracing::debug!(%username, "ignoring distributed child connection")
             }
         }
     }
@@ -772,6 +847,7 @@ impl Actor {
         match p.purpose {
             Purpose::Peer => self.register_peer(p.username, stream, method),
             Purpose::Upload(id) => self.on_upload_connection(id, stream),
+            Purpose::ParentCandidate => self.on_candidate_connected(p.username, stream),
         }
     }
 
@@ -847,6 +923,10 @@ impl Actor {
                     id,
                     reason: reason.clone(),
                 });
+            }
+            Purpose::ParentCandidate => {
+                tracing::debug!(username = %p.username, %reason, "possible parent unreachable");
+                return;
             }
         }
         self.emit(Event::PeerConnectFailed {

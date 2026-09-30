@@ -6,7 +6,7 @@ use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Paragraph, Row as TableRow, Table, TableState, Tabs};
-use seekr_net::{DownloadState, UploadState};
+use seekr_net::{DistribStatus, DownloadState, UploadState};
 
 use super::app::{App, Focus, SharesStatus, Tab};
 use super::results::{FormatFilter, Row};
@@ -342,7 +342,10 @@ fn render_transfers(frame: &mut Frame, app: &mut App, area: Rect) {
 fn render_uploads(frame: &mut Frame, app: &mut App, area: Rect) {
     let completed = app.uploads.completed;
     let block = Block::bordered()
-        .title(format!(" Uploads · {completed} completed this session "))
+        .title(format!(
+            " Uploads · {completed} completed · {} searches answered this session ",
+            app.searches_answered
+        ))
         .border_style(Style::new().cyan());
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -491,6 +494,27 @@ fn render_settings(frame: &mut Frame, app: &mut App, area: Rect) {
         Line::from("  TCP port other users connect to; forward it on your router.").dark_gray(),
     );
     push_item(&mut lines, 1, Item::ListenPort, s.listen_port.to_string());
+    lines.push(Line::default());
+    lines.push(Line::from("Distributed network").bold());
+    lines.push(
+        Line::from(match &app.distrib {
+            DistribStatus::Searching => "  looking for a parent...".to_owned(),
+            DistribStatus::Parent { username, level } => {
+                format!("  connected through {username} (level {})", level + 1)
+            }
+            DistribStatus::BranchRoot => {
+                "  branch root: the server sends searches directly".to_owned()
+            }
+        })
+        .green(),
+    );
+    lines.push(
+        Line::from(format!(
+            "  {} searches from other users answered this session",
+            app.searches_answered
+        ))
+        .dark_gray(),
+    );
     lines.push(Line::default());
     lines.push(Line::from("Shared folders").bold());
     lines.push(

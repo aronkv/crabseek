@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use seekr_net::{Client, DownloadState, Event};
+use seekr_net::{Client, DistribStatus, DownloadState, Event};
 
 use super::results::Results;
 use super::settings::{Settings, SettingsAction};
@@ -68,6 +68,9 @@ pub struct App {
     pub uploads: Uploads,
     pub uploads_offset: usize,
     pub shares: SharesStatus,
+    pub distrib: DistribStatus,
+    /// Searches by other users that our shares answered this session.
+    pub searches_answered: u64,
     pub settings: Settings,
     pub status: String,
     pub connected: bool,
@@ -103,6 +106,8 @@ impl App {
             uploads: Uploads::default(),
             uploads_offset: 0,
             shares: SharesStatus::Scanning,
+            distrib: DistribStatus::Searching,
+            searches_answered: 0,
             settings: Settings::new(cfg.download_dir()?, cfg.listen_port, cfg.shared_dirs()?),
             status: String::new(),
             connected: true,
@@ -194,6 +199,8 @@ impl App {
                 state,
             } => self.uploads.update(id, username, filename, state),
             Event::SharesScanning => self.shares = SharesStatus::Scanning,
+            Event::Distrib(status) => self.distrib = status,
+            Event::SearchAnswered { .. } => self.searches_answered += 1,
             Event::SharesScanned {
                 folders,
                 files,

@@ -41,11 +41,10 @@ you type `seekr`, search, and download whole albums in a few keystrokes.
 - **Transfer view:** live progress, speed, queue position and failure reasons, with
   retry and cancel. The download list survives restarts, and unfinished downloads
   continue where they stopped.
-- **Sharing:** other users can browse and download from your music folders (default
-  `~/Music`) and find them through user and room searches. Network-wide searches
-  arrive over the distributed network, which is on the roadmap. Audio properties are
-  read once and cached, and uploads are spread fairly over a configurable number of
-  slots.
+- **Sharing:** other users find your music folders (default `~/Music`) through
+  network-wide searches, and can browse and download from them. seekr joins the
+  distributed search network on its own. Audio properties are read once and cached,
+  and uploads are spread fairly over a configurable number of slots.
 - **Quality at a glance:** kbps for every file and folder (estimated from size and
   length, marked `~`, when the peer does not send it), plus sample rate and bit depth
   for lossless files, duration and size.
@@ -203,7 +202,7 @@ server = "server.slsknet.org:2242"      # default
 - [x] Login, peer connections (direct and indirect), search, downloads with resume
 - [x] TUI with folder view, format filter and transfer list
 - [x] Sharing your music library and serving uploads
-- [ ] Distributed search network
+- [x] Distributed search network (as a child node; relaying searches to children is next)
 - [ ] Browsing a user's shares, private messages, wishlist
 - [ ] Automatic port mapping (UPnP / NAT-PMP)
 - [ ] AUR package

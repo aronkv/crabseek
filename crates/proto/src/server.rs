@@ -24,6 +24,13 @@ mod code {
     pub const SET_STATUS: u32 = 28;
     pub const SERVER_PING: u32 = 32;
     pub const SHARED_FOLDERS_FILES: u32 = 35;
+    pub const HAVE_NO_PARENT: u32 = 71;
+    pub const EMBEDDED_MESSAGE: u32 = 93;
+    pub const ACCEPT_CHILDREN: u32 = 100;
+    pub const POSSIBLE_PARENTS: u32 = 102;
+    pub const BRANCH_LEVEL: u32 = 126;
+    pub const BRANCH_ROOT: u32 = 127;
+    pub const RESET_DISTRIBUTED: u32 = 130;
     pub const SEND_UPLOAD_SPEED: u32 = 121;
     pub const CANT_CONNECT_TO_PEER: u32 = 1001;
 }
@@ -76,6 +83,14 @@ pub enum ServerRequest {
     SendUploadSpeed {
         speed: u32,
     },
+    /// Whether we still look for a distributed parent.
+    HaveNoParent(bool),
+    /// Whether we take distributed children.
+    AcceptChildren(bool),
+    /// Our generation in the distributed branch.
+    BranchLevel(u32),
+    /// The root of our distributed branch.
+    BranchRoot(String),
 }
 
 impl ServerRequest {
@@ -146,6 +161,22 @@ impl ServerRequest {
                 b.put_u32_le(code::SEND_UPLOAD_SPEED);
                 b.put_u32_le(*speed);
             }
+            Self::HaveNoParent(no_parent) => {
+                b.put_u32_le(code::HAVE_NO_PARENT);
+                b.put_bool_wire(*no_parent);
+            }
+            Self::AcceptChildren(accept) => {
+                b.put_u32_le(code::ACCEPT_CHILDREN);
+                b.put_bool_wire(*accept);
+            }
+            Self::BranchLevel(level) => {
+                b.put_u32_le(code::BRANCH_LEVEL);
+                b.put_u32_le(*level);
+            }
+            Self::BranchRoot(root) => {
+                b.put_u32_le(code::BRANCH_ROOT);
+                b.put_string_wire(root);
+            }
         });
     }
 }
@@ -189,11 +220,27 @@ pub enum ServerResponse {
         token: u32,
         query: String,
     },
+    /// Up to 10 users we could adopt as distributed parent.
+    PossibleParents(Vec<PossibleParent>),
+    /// A distributed message from the server; we are a branch root.
+    EmbeddedMessage {
+        code: u8,
+        payload: Bytes,
+    },
+    /// Drop our distributed parent and children.
+    ResetDistributed,
     /// Anything not implemented yet; kept so callers can log it.
     Unknown {
         code: u32,
         payload: Bytes,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PossibleParent {
+    pub username: String,
+    pub ip: Ipv4Addr,
+    pub port: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,6 +285,23 @@ impl ServerResponse {
                     .unwrap_or(false),
             },
             code::CANT_CONNECT_TO_PEER => Self::CantConnectToPeer { token: r.u32()? },
+            code::POSSIBLE_PARENTS => {
+                let count = r.u32()? as usize;
+                let mut parents = Vec::with_capacity(count.min(16));
+                for _ in 0..count {
+                    parents.push(PossibleParent {
+                        username: r.string()?,
+                        ip: r.ipv4()?,
+                        port: r.u32()?,
+                    });
+                }
+                Self::PossibleParents(parents)
+            }
+            code::EMBEDDED_MESSAGE => Self::EmbeddedMessage {
+                code: r.u8()?,
+                payload: payload.slice(5..),
+            },
+            code::RESET_DISTRIBUTED => Self::ResetDistributed,
             code::FILE_SEARCH => Self::FileSearch {
                 username: r.string()?,
                 token: r.u32()?,
@@ -444,6 +508,56 @@ mod tests {
         assert_eq!(
             enc(ServerRequest::SendUploadSpeed { speed: 258 }),
             [8, 0, 0, 0, 121, 0, 0, 0, 2, 1, 0, 0]
+        );
+    }
+
+    #[test]
+    fn distributed_messages() {
+        let enc = |msg: ServerRequest| {
+            let mut buf = BytesMut::new();
+            msg.encode(&mut buf);
+            buf.to_vec()
+        };
+        assert_eq!(
+            enc(ServerRequest::HaveNoParent(true)),
+            [5, 0, 0, 0, 71, 0, 0, 0, 1]
+        );
+        assert_eq!(
+            enc(ServerRequest::AcceptChildren(false)),
+            [5, 0, 0, 0, 100, 0, 0, 0, 0]
+        );
+        assert_eq!(
+            enc(ServerRequest::BranchLevel(2)),
+            [8, 0, 0, 0, 126, 0, 0, 0, 2, 0, 0, 0]
+        );
+
+        let p = payload(|b| {
+            b.put_u32_le(102);
+            b.put_u32_le(1);
+            b.put_string_wire("dad");
+            b.put_ipv4_wire(Ipv4Addr::new(1, 2, 3, 4));
+            b.put_u32_le(2234);
+        });
+        assert_eq!(
+            ServerResponse::decode(p),
+            Ok(ServerResponse::PossibleParents(vec![PossibleParent {
+                username: "dad".into(),
+                ip: Ipv4Addr::new(1, 2, 3, 4),
+                port: 2234,
+            }]))
+        );
+
+        let p = payload(|b| {
+            b.put_u32_le(93);
+            b.put_u8(3);
+            b.put_slice(&[9, 9]);
+        });
+        assert_eq!(
+            ServerResponse::decode(p),
+            Ok(ServerResponse::EmbeddedMessage {
+                code: 3,
+                payload: Bytes::from_static(&[9, 9]),
+            })
         );
     }
 

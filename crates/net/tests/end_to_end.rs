@@ -26,9 +26,20 @@ struct Session {
 
 type Sessions = Arc<Mutex<HashMap<String, Session>>>;
 
-/// Users whose listen port the server hides, as if they were behind a
-/// firewall: others then only reach them through ConnectToPeer.
-type Firewalled = Arc<Vec<String>>;
+/// How the fake server behaves.
+#[derive(Default)]
+struct Opts {
+    /// Users whose listen port the server hides, as if they were behind a
+    /// firewall: others then only reach them through ConnectToPeer.
+    firewalled: Vec<String>,
+    /// Offer this distributed parent (name, port) to users without one.
+    parent: Option<(String, u16)>,
+    /// Hand every search to this channel (a fake distributed parent).
+    searches: Option<mpsc::UnboundedSender<(String, u32, String)>>,
+    /// Send searches to everyone else as EmbeddedMessage, as if they were
+    /// branch roots.
+    embed_searches: bool,
+}
 
 fn frame(code: u32, body: impl FnOnce(&mut BytesMut)) -> Vec<u8> {
     let mut b = BytesMut::new();
@@ -43,20 +54,28 @@ fn frame(code: u32, body: impl FnOnce(&mut BytesMut)) -> Vec<u8> {
 /// Implements just enough of the server: login, SetWaitPort,
 /// GetPeerAddress and relaying ConnectToPeer. Everything is on 127.0.0.1.
 async fn fake_server(firewalled: &[&str]) -> String {
-    let firewalled: Firewalled = Arc::new(firewalled.iter().map(|s| s.to_string()).collect());
+    fake_server_with(Opts {
+        firewalled: firewalled.iter().map(|s| s.to_string()).collect(),
+        ..Opts::default()
+    })
+    .await
+}
+
+async fn fake_server_with(opts: Opts) -> String {
+    let opts = Arc::new(opts);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap().to_string();
     let sessions: Sessions = Arc::default();
     tokio::spawn(async move {
         loop {
             let (stream, _) = listener.accept().await.unwrap();
-            tokio::spawn(serve(stream, sessions.clone(), firewalled.clone()));
+            tokio::spawn(serve(stream, sessions.clone(), opts.clone()));
         }
     });
     addr
 }
 
-async fn serve(stream: TcpStream, sessions: Sessions, firewalled: Firewalled) {
+async fn serve(stream: TcpStream, sessions: Sessions, opts: Arc<Opts>) {
     let (mut read, mut write) = stream.into_split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
     tokio::spawn(async move {
@@ -104,7 +123,7 @@ async fn serve(stream: TcpStream, sessions: Sessions, firewalled: Firewalled) {
             // GetPeerAddress
             3 => {
                 let user = r.string().unwrap();
-                let port = if firewalled.contains(&user) {
+                let port = if opts.firewalled.contains(&user) {
                     1 // nothing listens there
                 } else {
                     sessions.lock().unwrap().get(&user).map_or(0, |s| s.port)
@@ -145,8 +164,44 @@ async fn serve(stream: TcpStream, sessions: Sessions, firewalled: Firewalled) {
                         .unwrap();
                 }
             }
+            // FileSearch: hand it to the distributed network.
+            26 => {
+                let token = r.u32().unwrap();
+                let query = r.string().unwrap();
+                if let Some(searches) = &opts.searches {
+                    let _ = searches.send((me.clone(), token, query.clone()));
+                }
+                if opts.embed_searches {
+                    for (user, session) in sessions.lock().unwrap().iter() {
+                        if *user != me {
+                            let _ = session.tx.send(frame(93, |b| {
+                                b.put_u8(3);
+                                b.put_u32_le(49);
+                                b.put_string_wire(&me);
+                                b.put_u32_le(token);
+                                b.put_string_wire(&query);
+                            }));
+                        }
+                    }
+                }
+            }
+            // HaveNoParent(true): offer the fake parent.
+            71 => {
+                if r.u8().unwrap() == 1
+                    && let Some((name, port)) = &opts.parent
+                {
+                    tx.send(frame(102, |b| {
+                        b.put_u32_le(1);
+                        b.put_string_wire(name);
+                        b.put_ipv4_wire(Ipv4Addr::LOCALHOST);
+                        b.put_u32_le(u32::from(*port));
+                    }))
+                    .unwrap();
+                }
+            }
             // SetStatus, ServerPing, SharedFoldersFiles, SendUploadSpeed,
-            // CantConnectToPeer, FileSearch: nothing to answer.
+            // CantConnectToPeer, AcceptChildren, BranchLevel, BranchRoot:
+            // nothing to answer.
             _ => {}
         }
     }
@@ -309,5 +364,108 @@ async fn unshared_file_is_denied() {
     })
     .await;
     assert_eq!(reason, "File not shared.");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+fn distrib_frame(code: u8, body: impl FnOnce(&mut BytesMut)) -> Vec<u8> {
+    let mut b = BytesMut::new();
+    b.put_u32_le(0);
+    b.put_u8(code);
+    body(&mut b);
+    let len = (b.len() - 4) as u32;
+    b[..4].copy_from_slice(&len.to_le_bytes());
+    b.to_vec()
+}
+
+/// Shares one file as alice, searches for it as bob, and returns what bob
+/// found.
+async fn search_alice_from_bob(server: &str, root: &Path) -> Vec<String> {
+    let share = root.join("Music");
+    std::fs::create_dir_all(share.join("Album")).unwrap();
+    std::fs::write(share.join("Album").join("Kaini Industries.flac"), b"flac").unwrap();
+
+    let (_alice, mut alice_events) =
+        start(server, "alice", &root.join("a"), vec![share.clone()]).await;
+    wait_for(&mut alice_events, |e| match e {
+        Event::SharesScanned { .. } => Some(()),
+        _ => None,
+    })
+    .await;
+    let (bob, mut bob_events) = start(server, "bob", &root.join("b"), vec![]).await;
+    let token = bob.search("kaini").unwrap();
+    wait_for(&mut bob_events, |e| match e {
+        Event::SearchResult(r) if r.token == token => {
+            assert_eq!(r.username, "alice");
+            Some(r.files.into_iter().map(|f| f.filename).collect())
+        }
+        _ => None,
+    })
+    .await
+}
+
+/// Alice adopts a distributed parent offered by the server, and bob's
+/// search reaches her through it.
+#[tokio::test]
+async fn search_through_distributed_parent() {
+    let root = temp_dir("distrib");
+    let parent = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let parent_port = parent.local_addr().unwrap().port();
+    let (search_tx, mut search_rx) = mpsc::unbounded_channel();
+    let server = fake_server_with(Opts {
+        parent: Some(("dad".to_owned(), parent_port)),
+        searches: Some(search_tx),
+        ..Opts::default()
+    })
+    .await;
+
+    // The fake parent: accept alice's D connection, tell her our branch,
+    // then pass on every search the server hands us.
+    tokio::spawn(async move {
+        let (mut child, _) = parent.accept().await.unwrap();
+        let len = child.read_u32_le().await.unwrap();
+        let mut init = vec![0; len as usize];
+        child.read_exact(&mut init).await.unwrap();
+        assert_eq!(init[0], 1, "expected PeerInit");
+        assert!(
+            init.ends_with(&[1, 0, 0, 0, b'D', 0, 0, 0, 0]),
+            "expected a D connection"
+        );
+        child
+            .write_all(&distrib_frame(4, |b| b.put_i32_le(0)))
+            .await
+            .unwrap();
+        child
+            .write_all(&distrib_frame(5, |b| b.put_string_wire("dad")))
+            .await
+            .unwrap();
+        while let Some((user, token, query)) = search_rx.recv().await {
+            child
+                .write_all(&distrib_frame(3, |b| {
+                    b.put_u32_le(49);
+                    b.put_string_wire(&user);
+                    b.put_u32_le(token);
+                    b.put_string_wire(&query);
+                }))
+                .await
+                .unwrap();
+        }
+    });
+
+    let files = search_alice_from_bob(&server, &root).await;
+    assert_eq!(files, ["Music\\Album\\Kaini Industries.flac"]);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// The server embeds searches directly when alice is a branch root.
+#[tokio::test]
+async fn search_as_branch_root() {
+    let root = temp_dir("branch-root");
+    let server = fake_server_with(Opts {
+        embed_searches: true,
+        ..Opts::default()
+    })
+    .await;
+    let files = search_alice_from_bob(&server, &root).await;
+    assert_eq!(files.len(), 1);
     std::fs::remove_dir_all(root).unwrap();
 }
