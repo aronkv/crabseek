@@ -72,7 +72,10 @@ An AUR package is planned once seekr is stable. The draft lives in
 
 ## First run
 
-Start `seekr`. The first time, it asks for a Soulseek username and password.
+Start `seekr`. There is nothing to set up by hand: the first time, it asks for a
+Soulseek username and password, and it creates the config file itself once the server
+accepts them. On later starts it logs in straight away. The login screen only comes
+back if the saved password stops working.
 
 - **Already have an account?** Log in with it.
 - **New to Soulseek?** Pick any free name. The server creates the account the first
@@ -96,7 +99,7 @@ Without this, you can still download from peers that are reachable themselves.
 | Where | Key | Action |
 |---|---|---|
 | everywhere | `/` | focus the search box |
-| | `Tab`, `1`, `2` | switch between Search and Transfers |
+| | `Tab`, `1`, `2`, `3` | switch between Search, Transfers and Settings |
 | | `q` | quit (asks again while downloads are running) |
 | search box | `Enter` | search |
 | | `Esc` | back to the results |
@@ -109,6 +112,8 @@ Without this, you can still download from peers that are reachable themselves.
 | transfers | `c` | cancel |
 | | `r` | retry a failed download |
 | | `x` | clear finished downloads |
+| settings | `Enter` | edit the selected folder (`Tab` completes the path) |
+| | `a` / `x` | add or remove a shared folder |
 
 ### Command line
 
@@ -123,12 +128,15 @@ seekr config-path                       # where the config lives
 
 ## Configuration
 
-`~/.config/seekr/config.toml`. Every key except the credentials is optional:
+The download folder and the shared folders can be changed in the **Settings** tab
+(`3`); changes are saved immediately. Everything lives in
+`~/.config/seekr/config.toml`, and every key except the credentials is optional:
 
 ```toml
 username = "..."                        # written by the login screen
 password = "..."
 download_dir = "~/Downloads/seekr"      # default
+shared_dirs = ["~/Music"]               # default
 listen_port = 2234                      # default
 server = "server.slsknet.org:2242"      # default
 ```
@@ -138,9 +146,13 @@ for more detail.
 
 ## Security
 
-- The Soulseek login needs the plain password, which every client stores the same way.
-  seekr writes it to `~/.config/seekr/config.toml` with mode `600`, inside a `700`
-  directory, so only your user can read it. The file is replaced atomically.
+- The Soulseek login needs the plain password, so clients have to keep it. Nicotine+
+  and slskd keep it unencrypted in their config files, and seekr does the same, with
+  tighter permissions: `~/.config/seekr/config.toml` is written with mode `600`,
+  inside a `700` directory, so only your user can read it. The file is replaced
+  atomically.
+- Encrypting the file would not add real protection, because the key would have to sit
+  on the same disk. System keyring support (Secret Service) may come as an option.
 - Credentials never appear in logs, and the config lives outside the source tree, so
   it cannot end up in a commit of this repository.
 - If you keep `~/.config` in a dotfiles repository, make sure `seekr/` is not

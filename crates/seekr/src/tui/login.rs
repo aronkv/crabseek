@@ -124,6 +124,16 @@ fn validate(username: &str, password: &str) -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Whether the server refused these credentials, as opposed to the
+/// network or the listen port failing; only then is the form needed again.
+pub fn is_credential_error(error: &StartError) -> bool {
+    matches!(
+        error,
+        StartError::Login(LoginError::Rejected { reason, .. })
+            if reason == "INVALIDPASS" || reason == "INVALIDUSERNAME"
+    )
+}
+
 /// A human explanation of why logging in failed.
 pub fn explain(error: &StartError) -> String {
     match error {
@@ -234,6 +244,29 @@ pub fn render(frame: &mut Frame, form: &LoginForm, config_path: &str) {
         let x = (row.x + 1 + len as u16).min(row.right().saturating_sub(1));
         frame.set_cursor_position(Position::new(x, row.y));
     }
+}
+
+/// Shown while logging in with saved credentials, and when that fails for
+/// a reason other than the credentials.
+pub fn render_splash(frame: &mut Frame, username: &str, error: Option<&str>) {
+    let area = centered(frame.area(), 60, 7);
+    frame.render_widget(Clear, area);
+    let hint = if error.is_some() {
+        " r retry · q quit "
+    } else {
+        " q quit "
+    };
+    let block = Block::bordered()
+        .title(" seekr ".bold())
+        .title_bottom(Line::from(hint).dark_gray())
+        .border_style(Style::new().cyan());
+    let inner = block.inner(area).inner(ratatui::layout::Margin::new(2, 1));
+    frame.render_widget(block, area);
+    let text = match error {
+        None => Line::from(format!("Connecting as {username}...")).yellow(),
+        Some(e) => Line::from(e).red(),
+    };
+    frame.render_widget(Paragraph::new(text).wrap(Wrap { trim: true }), inner);
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {

@@ -223,6 +223,13 @@ impl Client {
         Ok(id)
     }
 
+    /// Where downloads that start from now on are saved.
+    pub fn set_download_dir(&self, dir: PathBuf) -> Result<(), ShutDown> {
+        self.tx
+            .send(Internal::SetDownloadDir(dir))
+            .map_err(|_| ShutDown)
+    }
+
     pub fn cancel_download(&self, id: DownloadId) -> Result<(), ShutDown> {
         self.tx
             .send(Internal::CancelDownload { id })
@@ -271,6 +278,7 @@ pub(crate) enum Internal {
     CancelDownload {
         id: DownloadId,
     },
+    SetDownloadDir(PathBuf),
     /// An `F` connection whose `FileTransferInit` has been read.
     FileConnection {
         username: String,
@@ -367,6 +375,7 @@ impl Actor {
                     filename,
                 } => self.start_download(id, username, filename).await,
                 Internal::CancelDownload { id } => self.cancel_download(id),
+                Internal::SetDownloadDir(dir) => self.download_dir = dir,
                 Internal::FileConnection {
                     username,
                     token,

@@ -26,6 +26,8 @@ pub struct Config {
     pub listen_port: u16,
     /// Defaults to `~/Downloads/seekr`; a leading `~/` is expanded.
     download_dir: Option<PathBuf>,
+    /// Folders offered to other users. Defaults to `~/Music`.
+    shared_dirs: Option<Vec<PathBuf>>,
 }
 
 impl Default for Config {
@@ -61,6 +63,20 @@ impl Config {
         }
     }
 
+    pub fn shared_dirs(&self) -> anyhow::Result<Vec<PathBuf>> {
+        match &self.shared_dirs {
+            Some(dirs) => dirs.iter().map(|d| expand_home(d)).collect(),
+            None => {
+                let dirs = UserDirs::new().context("could not determine home directory")?;
+                Ok(vec![
+                    dirs.audio_dir()
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| dirs.home_dir().join("Music")),
+                ])
+            }
+        }
+    }
+
     pub fn client_config(&self) -> anyhow::Result<ClientConfig> {
         Ok(ClientConfig {
             server: self.server.clone(),
@@ -72,7 +88,7 @@ impl Config {
     }
 }
 
-fn expand_home(path: &Path) -> anyhow::Result<PathBuf> {
+pub fn expand_home(path: &Path) -> anyhow::Result<PathBuf> {
     match path.strip_prefix("~") {
         Ok(rest) => Ok(BaseDirs::new()
             .context("could not determine home directory")?
@@ -129,6 +145,19 @@ pub fn save_credentials(username: &str, password: &str) -> anyhow::Result<()> {
     update(|table| {
         table.insert("username".into(), username.into());
         table.insert("password".into(), password.into());
+    })
+}
+
+pub fn save_download_dir(dir: &Path) -> anyhow::Result<()> {
+    update(|table| {
+        table.insert("download_dir".into(), display_path(dir).into());
+    })
+}
+
+pub fn save_shared_dirs(dirs: &[PathBuf]) -> anyhow::Result<()> {
+    update(|table| {
+        let list: Vec<toml::Value> = dirs.iter().map(|d| display_path(d).into()).collect();
+        table.insert("shared_dirs".into(), list.into());
     })
 }
 
@@ -189,6 +218,7 @@ mod tests {
         assert_eq!(cfg.listen_port, 2234);
         assert!(!cfg.has_credentials());
         assert!(cfg.download_dir().unwrap().ends_with("seekr"));
+        assert_eq!(cfg.shared_dirs().unwrap().len(), 1);
     }
 
     #[test]
@@ -196,6 +226,12 @@ mod tests {
         let cfg: Config = toml::from_str("download_dir = \"~/x/y\"").unwrap();
         let home = BaseDirs::new().unwrap().home_dir().to_owned();
         assert_eq!(cfg.download_dir().unwrap(), home.join("x/y"));
+        let cfg: Config = toml::from_str("shared_dirs = [\"~/a\", \"/b\"]").unwrap();
+        assert_eq!(
+            cfg.shared_dirs().unwrap(),
+            [home.join("a"), PathBuf::from("/b")]
+        );
+        assert_eq!(display_path(&home.join("a")), "~/a");
     }
 
     #[test]

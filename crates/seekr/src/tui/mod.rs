@@ -3,12 +3,15 @@
 mod app;
 mod login;
 mod results;
+mod settings;
 mod transfers;
 mod ui;
 
 use std::time::Duration;
 
-use crossterm::event::{Event as TermEvent, EventStream, KeyEvent, KeyEventKind};
+use crossterm::event::{
+    Event as TermEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+};
 use futures::StreamExt;
 use seekr_net::{Client, Event};
 use tokio::sync::mpsc;
@@ -41,33 +44,46 @@ async fn next_key(input: &mut EventStream) -> anyhow::Result<Option<KeyEvent>> {
     }
 }
 
-/// Logs in with the saved credentials, or asks for them first. Credentials
-/// typed into the form are saved only after the server accepted them.
+/// Logs in with the saved credentials (showing only a small "connecting"
+/// box), or asks for them when there are none or the server rejects them.
+/// Credentials typed into the form are saved only after the server
+/// accepted them; the config file and its folder are created then.
 async fn login_then_run(
     terminal: &mut ratatui::DefaultTerminal,
     mut cfg: Config,
 ) -> anyhow::Result<()> {
+    enum Screen {
+        Form,
+        /// Saved credentials: connecting, or a non-credential error.
+        Splash(Option<String>),
+    }
+
     let mut input = EventStream::new();
     let config_path = config::display_path(&config::path()?);
     let mut form = LoginForm::new(cfg.username.clone());
     let mut from_form = false;
     let mut attempt = cfg.has_credentials();
+    let mut screen = if attempt {
+        Screen::Splash(None)
+    } else {
+        Screen::Form
+    };
 
     loop {
         if attempt {
             attempt = false;
-            form.busy = true;
+            form.busy = from_form;
             let mut start = Box::pin(Client::start(cfg.client_config()?));
             let result = loop {
-                terminal.draw(|f| login::render(f, &form, &config_path))?;
+                terminal.draw(|f| match screen {
+                    Screen::Form => login::render(f, &form, &config_path),
+                    Screen::Splash(_) => login::render_splash(f, &cfg.username, None),
+                })?;
                 tokio::select! {
                     result = &mut start => break result,
                     key = next_key(&mut input) => match key? {
-                        Some(key) => {
-                            if let LoginAction::Quit = form.on_key(key) {
-                                return Ok(());
-                            }
-                        }
+                        Some(key) if is_quit(key) => return Ok(()),
+                        Some(_) => {}
                         None => return Ok(()),
                     },
                 }
@@ -77,31 +93,53 @@ async fn login_then_run(
                     if from_form {
                         config::save_credentials(&cfg.username, &cfg.password)?;
                     }
-                    let app = App::new(client, cfg.username.clone());
+                    let app = App::new(client, cfg.username.clone(), &cfg)?;
                     return event_loop(terminal, &mut input, app, events).await;
                 }
                 Err(e) => {
                     tracing::warn!(%e, "login failed");
-                    form.failed(login::explain(&e));
+                    if from_form || login::is_credential_error(&e) {
+                        form.failed(login::explain(&e));
+                        screen = Screen::Form;
+                    } else {
+                        screen = Screen::Splash(Some(login::explain(&e)));
+                    }
                 }
             }
         }
 
-        terminal.draw(|f| login::render(f, &form, &config_path))?;
+        terminal.draw(|f| match &screen {
+            Screen::Form => login::render(f, &form, &config_path),
+            Screen::Splash(error) => login::render_splash(f, &cfg.username, error.as_deref()),
+        })?;
         let Some(key) = next_key(&mut input).await? else {
             return Ok(());
         };
-        match form.on_key(key) {
-            LoginAction::Submit { username, password } => {
-                cfg.username = username;
-                cfg.password = password;
-                from_form = true;
-                attempt = true;
+        match screen {
+            Screen::Form => match form.on_key(key) {
+                LoginAction::Submit { username, password } => {
+                    cfg.username = username;
+                    cfg.password = password;
+                    from_form = true;
+                    attempt = true;
+                }
+                LoginAction::Quit => return Ok(()),
+                LoginAction::None => {}
+            },
+            Screen::Splash(_) if is_quit(key) || key.code == KeyCode::Char('q') => return Ok(()),
+            Screen::Splash(_) => {
+                if matches!(key.code, KeyCode::Char('r') | KeyCode::Enter) {
+                    screen = Screen::Splash(None);
+                    attempt = true;
+                }
             }
-            LoginAction::Quit => return Ok(()),
-            LoginAction::None => {}
         }
     }
+}
+
+fn is_quit(key: KeyEvent) -> bool {
+    key.code == KeyCode::Esc
+        || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c'))
 }
 
 async fn event_loop(
@@ -148,9 +186,10 @@ mod tests {
 
     use super::app::{ActiveSearch, Focus, Tab};
     use super::*;
+    use crate::config::Config;
 
     fn app_with_results() -> App {
-        let mut app = App::new(Client::offline(), "me".into());
+        let mut app = App::new(Client::offline(), "me".into(), &Config::default()).unwrap();
         app.search = Some(ActiveSearch {
             token: 1,
             query: "boards of canada".into(),
@@ -256,6 +295,21 @@ mod tests {
         println!("{screen}");
         assert!(screen.contains(" alice"));
         assert!(screen.contains("Wrong password"));
+    }
+
+    #[test]
+    fn renders_settings_while_editing() {
+        let mut app = app_with_results();
+        app.tab = Tab::Settings;
+        app.on_key(KeyEvent::from(KeyCode::Char('a')));
+        let screen = draw(&mut app);
+        println!("{screen}");
+        assert!(screen.contains("Download folder"));
+        assert!(screen.contains("~/"));
+        assert!(screen.contains("Tab complete folder"));
+        // Keys go to the path editor, not to tab switching.
+        app.on_key(KeyEvent::from(KeyCode::Char('1')));
+        assert_eq!(app.tab, Tab::Settings);
     }
 
     #[test]

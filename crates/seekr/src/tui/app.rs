@@ -6,12 +6,15 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use seekr_net::{Client, DownloadState, Event};
 
 use super::results::Results;
+use super::settings::{Settings, SettingsAction};
 use super::transfers::Transfers;
+use crate::config::{self, Config};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
     Search,
     Transfers,
+    Settings,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -38,6 +41,7 @@ pub struct App {
     pub results_offset: usize,
     pub transfers: Transfers,
     pub transfers_offset: usize,
+    pub settings: Settings,
     pub status: String,
     pub connected: bool,
     /// Rows visible in the current list, for page up/down.
@@ -47,8 +51,8 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(client: Client, username: String) -> Self {
-        Self {
+    pub fn new(client: Client, username: String, cfg: &Config) -> anyhow::Result<Self> {
+        Ok(Self {
             client,
             username,
             tab: Tab::Search,
@@ -59,12 +63,13 @@ impl App {
             results_offset: 0,
             transfers: Transfers::default(),
             transfers_offset: 0,
+            settings: Settings::new(cfg.download_dir()?, cfg.shared_dirs()?),
             status: String::new(),
             connected: true,
             page_size: 10,
             quit: false,
             confirm_quit: false,
-        }
+        })
     }
 
     pub fn on_event(&mut self, event: Event) {
@@ -107,17 +112,31 @@ impl App {
             self.on_input_key(key);
             return;
         }
+        // A path being edited takes every key.
+        if self.tab == Tab::Settings && self.settings.is_editing() {
+            self.on_settings_key(key);
+            return;
+        }
 
         match key.code {
             KeyCode::Char('q') => self.request_quit(),
-            KeyCode::Tab | KeyCode::BackTab => {
+            KeyCode::Tab => {
                 self.tab = match self.tab {
                     Tab::Search => Tab::Transfers,
+                    Tab::Transfers => Tab::Settings,
+                    Tab::Settings => Tab::Search,
+                }
+            }
+            KeyCode::BackTab => {
+                self.tab = match self.tab {
+                    Tab::Search => Tab::Settings,
                     Tab::Transfers => Tab::Search,
+                    Tab::Settings => Tab::Transfers,
                 }
             }
             KeyCode::Char('1') => self.tab = Tab::Search,
             KeyCode::Char('2') => self.tab = Tab::Transfers,
+            KeyCode::Char('3') => self.tab = Tab::Settings,
             KeyCode::Char('/') => {
                 self.tab = Tab::Search;
                 self.focus = Focus::Input;
@@ -125,8 +144,30 @@ impl App {
             _ => match self.tab {
                 Tab::Search => self.on_results_key(key),
                 Tab::Transfers => self.on_transfers_key(key),
+                Tab::Settings => self.on_settings_key(key),
             },
         }
+    }
+
+    fn on_settings_key(&mut self, key: KeyEvent) {
+        let result = match self.settings.on_key(key) {
+            SettingsAction::None => return,
+            SettingsAction::SetDownloadDir(dir) => config::save_download_dir(&dir).map(|()| {
+                let _ = self.client.set_download_dir(dir.clone());
+                format!("downloads now go to {}", config::display_path(&dir))
+            }),
+            SettingsAction::SetSharedDirs(dirs) => config::save_shared_dirs(&dirs).map(|()| {
+                format!(
+                    "saved {} shared folder{} (sharing starts in a coming version)",
+                    dirs.len(),
+                    if dirs.len() == 1 { "" } else { "s" }
+                )
+            }),
+        };
+        self.status = match result {
+            Ok(msg) => msg,
+            Err(e) => format!("could not save the config: {e:#}"),
+        };
     }
 
     fn request_quit(&mut self) {

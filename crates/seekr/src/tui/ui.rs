@@ -10,6 +10,8 @@ use seekr_net::DownloadState;
 
 use super::app::{App, Focus, Tab};
 use super::results::{FormatFilter, Row};
+use super::settings::Item;
+use crate::config::{self, display_path};
 use crate::search::{human_size, quality};
 
 const SELECTED: Style = Style::new().add_modifier(Modifier::REVERSED);
@@ -27,6 +29,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     match app.tab {
         Tab::Search => render_search(frame, app, body),
         Tab::Transfers => render_transfers(frame, app, body),
+        Tab::Settings => render_settings(frame, app, body),
     }
     frame.render_widget(
         Paragraph::new(app.status.as_str()).fg(Color::Yellow),
@@ -44,10 +47,12 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         } else {
             " 2 Transfers ".to_owned()
         }),
+        Line::from(" 3 Settings "),
     ];
     let selected = match app.tab {
         Tab::Search => 0,
         Tab::Transfers => 1,
+        Tab::Settings => 2,
     };
     frame.render_widget(
         Tabs::new(titles)
@@ -326,9 +331,94 @@ fn help_line(app: &App) -> &'static str {
             " j/k move · Enter open folder · h/l collapse/expand · d download · f/F format filter · / search · Tab transfers · q quit"
         }
         (Tab::Transfers, _) => {
-            " j/k move · c cancel · r retry failed · x clear finished · / search · Tab search · q quit"
+            " j/k move · c cancel · r retry failed · x clear finished · / search · Tab settings · q quit"
+        }
+        (Tab::Settings, _) if app.settings.is_editing() => {
+            " Tab complete folder · Enter save · Esc cancel · Ctrl-u clear"
+        }
+        (Tab::Settings, _) => {
+            " j/k move · Enter edit · a add shared folder · x remove · / search · Tab search · q quit"
         }
     }
+}
+
+fn render_settings(frame: &mut Frame, app: &mut App, area: Rect) {
+    let block = Block::bordered()
+        .title(" Settings ")
+        .border_style(Style::new().cyan());
+    let inner = block.inner(area).inner(ratatui::layout::Margin::new(1, 0));
+    frame.render_widget(block, area);
+
+    let s = &app.settings;
+    let editing = s.edit.as_ref();
+    let mut lines: Vec<Line> = Vec::new();
+    let mut cursor = None;
+    let mut push_item = |lines: &mut Vec<Line>, index: usize, item: Item, text: String| {
+        let selected = s.selected == index;
+        let marker = if selected { "› " } else { "  " };
+        match editing.filter(|e| e.item == item) {
+            Some(edit) => {
+                cursor = Some((
+                    lines.len(),
+                    marker.chars().count() + edit.text.chars().count(),
+                ));
+                lines.push(Line::from(vec![
+                    Span::raw(marker),
+                    Span::raw(edit.text.clone()).reversed(),
+                ]));
+            }
+            None if selected && editing.is_none() => lines.push(Line::from(vec![
+                Span::raw(marker),
+                Span::raw(text).bold().cyan(),
+            ])),
+            None => lines.push(Line::from(vec![Span::raw(marker), Span::raw(text)])),
+        }
+    };
+
+    lines.push(Line::from("Download folder").bold());
+    lines.push(Line::from("  Where downloads are saved, one folder per album.").dark_gray());
+    push_item(
+        &mut lines,
+        0,
+        Item::DownloadDir,
+        display_path(&s.download_dir),
+    );
+    lines.push(Line::default());
+    lines.push(Line::from("Shared folders").bold());
+    lines.push(
+        Line::from("  Music you offer to other users (sharing starts in a coming version).")
+            .dark_gray(),
+    );
+    for (i, dir) in s.shared.iter().enumerate() {
+        push_item(&mut lines, i + 1, Item::Shared(i), display_path(dir));
+    }
+    push_item(
+        &mut lines,
+        s.shared.len() + 1,
+        Item::AddShared,
+        "+ add folder".to_owned(),
+    );
+    if let Some(error) = &s.error {
+        lines.push(Line::default());
+        lines.push(Line::from(error.as_str()).red());
+    }
+    lines.push(Line::default());
+    lines.push(
+        Line::from(format!(
+            "  Saved to {}",
+            config::path().map(|p| display_path(&p)).unwrap_or_default()
+        ))
+        .dark_gray(),
+    );
+
+    if let Some((row, col)) = cursor {
+        frame.set_cursor_position(Position::new(
+            (inner.x + col as u16).min(inner.right().saturating_sub(1)),
+            inner.y + row as u16,
+        ));
+    }
+    // No wrapping: the cursor position above assumes one line per entry.
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 /// Keeps `selected` inside a window of `height` rows starting at `offset`.
