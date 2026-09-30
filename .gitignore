@@ -1,0 +1,6 @@
+/target
+*.part
+
+# Local copy of the Nicotine+ protocol documentation (GPL-3.0, not
+# redistributed here). Fetch it with: scripts/fetch-protocol-doc.sh
+/docs/SLSKPROTOCOL.md

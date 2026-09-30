@@ -1,0 +1,28 @@
+[package]
+name = "seekr"
+description = "A fast Soulseek client for the terminal"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme = "../../README.md"
+keywords = ["soulseek", "p2p", "tui", "music", "terminal"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.7", features = ["derive"] }
+crossterm = { version = "0.29", features = ["event-stream"] }
+directories = "6.0.0"
+futures = "0.3.34"
+ratatui = "0.30.2"
+seekr-net = { version = "0.1.0", path = "../net" }
+seekr-proto = { version = "0.1.0", path = "../proto" }
+serde = { version = "1.0.229", features = ["derive"] }
+tokio = { version = "1.53.1", features = ["full"] }
+toml = "1.1.6"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

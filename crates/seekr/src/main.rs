@@ -1,0 +1,270 @@
+mod config;
+mod download;
+mod search;
+mod tui;
+
+use std::time::Duration;
+
+use clap::{Parser, Subcommand};
+use seekr_net::{Client, Event, ServerConnection};
+use seekr_proto::peer::PeerMsg;
+use seekr_proto::server::{ServerRequest, ServerResponse};
+use tokio::sync::mpsc;
+
+#[derive(Parser)]
+#[command(version, about = "Soulseek client for the terminal")]
+struct Cli {
+    /// Without a subcommand, the TUI starts.
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Log in, announce the listen port and print what the server sends.
+    Login {
+        /// How long to keep listening after login.
+        #[arg(long, default_value_t = 5)]
+        listen_secs: u64,
+    },
+    /// Connect to a user and print their user info (tests peer connections).
+    Userinfo {
+        username: String,
+        #[arg(long, default_value_t = 40)]
+        timeout_secs: u64,
+    },
+    /// Stay online and print peer activity (tests inbound connections).
+    Online {
+        #[arg(long, default_value_t = 300)]
+        secs: u64,
+    },
+    /// Search the network and print results grouped by user and folder.
+    Search {
+        query: String,
+        /// How long to collect results.
+        #[arg(long, default_value_t = 10)]
+        secs: u64,
+        /// How many users to show.
+        #[arg(long, default_value_t = 15)]
+        top: usize,
+        /// Print full remote paths, ready to paste into `download`.
+        #[arg(long)]
+        full_paths: bool,
+    },
+    /// Download one file. FILENAME is the full remote path, as printed
+    /// by `search --full-paths`.
+    Download { username: String, filename: String },
+    /// Forget the saved username and password.
+    Logout,
+    /// Print the config file location.
+    ConfigPath,
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let Some(command) = Cli::parse().command else {
+        return run_tui().await;
+    };
+    tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .with_writer(std::io::stderr)
+        .init();
+
+    match command {
+        Command::Login { listen_secs } => login(listen_secs).await,
+        Command::Userinfo {
+            username,
+            timeout_secs,
+        } => userinfo(username, timeout_secs).await,
+        Command::Online { secs } => online(secs).await,
+        Command::Download { username, filename } => {
+            let (client, events) = start_client().await?;
+            download::run(client, events, &username, &filename).await
+        }
+        Command::Search {
+            query,
+            secs,
+            top,
+            full_paths,
+        } => {
+            let (client, events) = start_client().await?;
+            search::run(client, events, &query, secs, top, full_paths).await
+        }
+        Command::Logout => {
+            if config::clear_credentials()? {
+                println!("logged out; run `seekr` to log in again");
+            } else {
+                println!("not logged in");
+            }
+            Ok(())
+        }
+        Command::ConfigPath => {
+            println!("{}", config::path()?.display());
+            Ok(())
+        }
+    }
+}
+
+/// The TUI owns the terminal, so logs go to a file instead.
+async fn run_tui() -> anyhow::Result<()> {
+    let log_path = config::log_path()?;
+    if let Some(dir) = log_path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let log = std::fs::File::create(&log_path)?;
+    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "seekr=info,seekr_net=info".into());
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_ansi(false)
+        .with_writer(std::sync::Mutex::new(log))
+        .init();
+
+    tui::run(config::load_or_default()?).await
+}
+
+async fn login(listen_secs: u64) -> anyhow::Result<()> {
+    let cfg = config::load()?;
+    println!("connecting to {} as {}", cfg.server, cfg.username);
+
+    let (mut conn, info) =
+        ServerConnection::login(&cfg.server, &cfg.username, &cfg.password).await?;
+    println!("logged in, external IP {}", info.own_ip);
+    println!("supporter: {}", info.is_supporter);
+    println!("greeting: {}", info.greeting);
+
+    conn.send(&ServerRequest::SetWaitPort {
+        port: cfg.listen_port.into(),
+    })
+    .await?;
+
+    println!("\nmessages in the next {listen_secs}s:");
+    let deadline = tokio::time::sleep(Duration::from_secs(listen_secs));
+    tokio::pin!(deadline);
+    loop {
+        tokio::select! {
+            _ = &mut deadline => break,
+            msg = conn.recv() => match msg? {
+                Some(ServerResponse::Unknown { code, payload }) => {
+                    println!("  code {code:>4}  {} bytes", payload.len());
+                }
+                Some(other) => println!("  {other:?}"),
+                None => {
+                    println!("server closed the connection");
+                    break;
+                }
+            },
+        }
+    }
+    Ok(())
+}
+
+async fn start_client() -> anyhow::Result<(Client, mpsc::UnboundedReceiver<Event>)> {
+    let cfg = config::load()?;
+    println!(
+        "logging in as {} (listening on port {})",
+        cfg.username, cfg.listen_port
+    );
+    let (client, info, events) = Client::start(cfg.client_config()?).await?;
+    println!("logged in, external IP {}", info.own_ip);
+    Ok((client, events))
+}
+
+/// Prints an event; returns false once the client has stopped.
+fn print_event(event: &Event) -> bool {
+    match event {
+        Event::PeerConnected { username, method } => {
+            println!("[{username}] connected ({method:?})")
+        }
+        Event::PeerConnectFailed { username, reason } => {
+            println!("[{username}] connection failed: {reason}")
+        }
+        Event::PeerDisconnected { username, reason } => {
+            println!("[{username}] disconnected: {reason}")
+        }
+        Event::PeerMessage { username, msg } => match msg {
+            PeerMsg::UserInfoResponse(info) => {
+                println!("[{username}] user info:");
+                println!(
+                    "  description:   {}",
+                    info.description.replace('\n', "\n                 ")
+                );
+                println!(
+                    "  picture:       {}",
+                    info.picture
+                        .as_ref()
+                        .map_or("none".to_owned(), |p| format!("{} bytes", p.len()))
+                );
+                println!("  total uploads: {}", info.total_uploads);
+                println!("  queue size:    {}", info.queue_size);
+                println!("  free slots:    {}", info.slots_free);
+            }
+            PeerMsg::Unknown { code, payload } => {
+                println!("[{username}] peer message {code} ({} bytes)", payload.len())
+            }
+            other => println!("[{username}] {other:?}"),
+        },
+        Event::SearchResult(resp) => println!(
+            "[{}] {} search results (token {})",
+            resp.username,
+            resp.files.len(),
+            resp.token
+        ),
+        Event::Download {
+            username,
+            filename,
+            state,
+            ..
+        } => println!("[{username}] {filename}: {state:?}"),
+        Event::ServerMessage(_) => {}
+        Event::ServerClosed { reason } => {
+            println!("server connection closed: {reason}");
+            return false;
+        }
+    }
+    true
+}
+
+async fn userinfo(username: String, timeout_secs: u64) -> anyhow::Result<()> {
+    let (client, mut events) = start_client().await?;
+    println!("connecting to {username}...");
+    client.send_peer(&username, PeerMsg::UserInfoRequest)?;
+
+    let deadline = tokio::time::sleep(Duration::from_secs(timeout_secs));
+    tokio::pin!(deadline);
+    loop {
+        tokio::select! {
+            _ = &mut deadline => anyhow::bail!("no answer from {username} within {timeout_secs}s"),
+            event = events.recv() => {
+                let Some(event) = event else { return Ok(()) };
+                if !print_event(&event) {
+                    return Ok(());
+                }
+                match event {
+                    Event::PeerMessage { username: from, msg: PeerMsg::UserInfoResponse(_) }
+                        if from == username => return Ok(()),
+                    Event::PeerConnectFailed { username: from, .. } if from == username => {
+                        anyhow::bail!("could not reach {username}")
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+async fn online(secs: u64) -> anyhow::Result<()> {
+    let (_client, mut events) = start_client().await?;
+    println!("online for {secs}s, waiting for peers...");
+    let deadline = tokio::time::sleep(Duration::from_secs(secs));
+    tokio::pin!(deadline);
+    loop {
+        tokio::select! {
+            _ = &mut deadline => return Ok(()),
+            event = events.recv() => match event {
+                Some(event) if print_event(&event) => {}
+                _ => return Ok(()),
+            },
+        }
+    }
+}

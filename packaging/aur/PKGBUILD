@@ -1,0 +1,41 @@
+# Maintainer: DarkAaronfox <120031218+DarkAaronfox@users.noreply.github.com>
+#
+# Draft for a future AUR release; not published yet. Before publishing:
+# tag a release, set pkgver, replace the checksum, run namcap.
+pkgname=seekr
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="A fast Soulseek client for the terminal"
+arch=('x86_64' 'aarch64')
+url="https://github.com/DarkAaronfox/seekr"
+license=('MIT')
+depends=('gcc-libs' 'glibc')
+makedepends=('cargo')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release
+}
+
+check() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    cargo test --frozen
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    install -Dm755 target/release/seekr "$pkgdir/usr/bin/seekr"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+}
