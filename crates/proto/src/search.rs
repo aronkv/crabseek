@@ -140,7 +140,7 @@ impl SearchResponse {
     }
 }
 
-fn decode_files(r: &mut Reader) -> DecodeResult<Vec<SearchFile>> {
+pub(crate) fn decode_files(r: &mut Reader) -> DecodeResult<Vec<SearchFile>> {
     let count = r.u32()? as usize;
     // Each entry is at least 21 bytes; don't trust the count for allocation.
     let mut files = Vec::with_capacity(count.min(r.remaining() / 21));
@@ -164,7 +164,7 @@ fn decode_files(r: &mut Reader) -> DecodeResult<Vec<SearchFile>> {
     Ok(files)
 }
 
-fn encode_files(b: &mut BytesMut, files: &[SearchFile]) {
+pub(crate) fn encode_files(b: &mut BytesMut, files: &[SearchFile]) {
     b.put_u32_le(files.len() as u32);
     for f in files {
         b.put_u8(1);

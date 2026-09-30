@@ -4,9 +4,14 @@
 use bytes::{BufMut, Bytes, BytesMut};
 
 use crate::search::SearchResponse;
+use crate::shares::{FolderContents, SharedFileList};
 use crate::wire::{DecodeResult, Reader, WireWrite, write_frame};
 
 mod code {
+    pub const SHARED_FILE_LIST_REQUEST: u32 = 4;
+    pub const SHARED_FILE_LIST_RESPONSE: u32 = 5;
+    pub const FOLDER_CONTENTS_REQUEST: u32 = 36;
+    pub const FOLDER_CONTENTS_RESPONSE: u32 = 37;
     pub const FILE_SEARCH_RESPONSE: u32 = 9;
     pub const USER_INFO_REQUEST: u32 = 15;
     pub const USER_INFO_RESPONSE: u32 = 16;
@@ -30,6 +35,13 @@ pub enum TransferDirection {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerMsg {
+    SharedFileListRequest,
+    SharedFileListResponse(SharedFileList),
+    FolderContentsRequest {
+        token: u32,
+        folder: String,
+    },
+    FolderContentsResponse(FolderContents),
     FileSearchResponse(SearchResponse),
     UserInfoRequest,
     UserInfoResponse(UserInfo),
@@ -87,6 +99,20 @@ pub struct UserInfo {
 impl PeerMsg {
     pub fn encode(&self, dst: &mut BytesMut) {
         write_frame(dst, |b| match self {
+            Self::SharedFileListRequest => b.put_u32_le(code::SHARED_FILE_LIST_REQUEST),
+            Self::SharedFileListResponse(list) => {
+                b.put_u32_le(code::SHARED_FILE_LIST_RESPONSE);
+                list.encode_compressed(b);
+            }
+            Self::FolderContentsRequest { token, folder } => {
+                b.put_u32_le(code::FOLDER_CONTENTS_REQUEST);
+                b.put_u32_le(*token);
+                b.put_string_wire(folder);
+            }
+            Self::FolderContentsResponse(contents) => {
+                b.put_u32_le(code::FOLDER_CONTENTS_RESPONSE);
+                contents.encode_compressed(b);
+            }
             Self::FileSearchResponse(resp) => {
                 b.put_u32_le(code::FILE_SEARCH_RESPONSE);
                 resp.encode_compressed(b);
@@ -176,6 +202,17 @@ impl PeerMsg {
         let mut r = Reader::new(&payload);
         let code = r.u32()?;
         Ok(match code {
+            code::SHARED_FILE_LIST_REQUEST => Self::SharedFileListRequest,
+            code::SHARED_FILE_LIST_RESPONSE => {
+                Self::SharedFileListResponse(SharedFileList::decode_compressed(r.rest())?)
+            }
+            code::FOLDER_CONTENTS_REQUEST => Self::FolderContentsRequest {
+                token: r.u32()?,
+                folder: r.string()?,
+            },
+            code::FOLDER_CONTENTS_RESPONSE => {
+                Self::FolderContentsResponse(FolderContents::decode_compressed(r.rest())?)
+            }
             code::FILE_SEARCH_RESPONSE => {
                 Self::FileSearchResponse(SearchResponse::decode_compressed(r.rest())?)
             }
@@ -361,9 +398,24 @@ mod tests {
     }
 
     #[test]
+    fn browse_roundtrips() {
+        roundtrip(PeerMsg::SharedFileListRequest);
+        roundtrip(PeerMsg::SharedFileListResponse(SharedFileList::default()));
+        roundtrip(PeerMsg::FolderContentsRequest {
+            token: 3,
+            folder: "Music\\A".into(),
+        });
+        roundtrip(PeerMsg::FolderContentsResponse(FolderContents {
+            token: 3,
+            folder: "Music\\A".into(),
+            dirs: vec![],
+        }));
+    }
+
+    #[test]
     fn unknown_roundtrips() {
         roundtrip(PeerMsg::Unknown {
-            code: 4,
+            code: 99,
             payload: Bytes::from_static(&[1, 2, 3]),
         });
     }

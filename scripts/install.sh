@@ -3,7 +3,7 @@
 #
 #   scripts/install.sh              # install or update
 #   PREFIX=/usr/local sudo -E scripts/install.sh
-#   scripts/install.sh --uninstall
+#   scripts/uninstall.sh [--purge]  # remove it again
 set -eu
 
 PREFIX="${PREFIX:-$HOME/.local}"
@@ -11,10 +11,7 @@ BIN="$PREFIX/bin/seekr"
 cd "$(dirname "$0")/.."
 
 if [ "${1:-}" = "--uninstall" ]; then
-    rm -f "$BIN"
-    echo "removed $BIN"
-    echo "your login and settings are kept in ~/.config/seekr (delete that folder to remove them)"
-    exit 0
+    exec scripts/uninstall.sh
 fi
 
 if ! command -v cargo >/dev/null 2>&1; then

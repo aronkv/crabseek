@@ -55,6 +55,14 @@ enum Command {
     /// Download one file. FILENAME is the full remote path, as printed
     /// by `search --full-paths`.
     Download { username: String, filename: String },
+    /// Scan the shared folders and show what other users see; with a
+    /// query, show what a search for it would return.
+    Shares {
+        query: Option<String>,
+        /// Scan this folder instead of the configured ones (repeatable).
+        #[arg(long = "dir")]
+        dirs: Vec<std::path::PathBuf>,
+    },
     /// Forget the saved username and password.
     Logout,
     /// Print the config file location.
@@ -91,6 +99,7 @@ async fn main() -> anyhow::Result<()> {
             let (client, events) = start_client().await?;
             search::run(client, events, &query, secs, top, full_paths).await
         }
+        Command::Shares { query, dirs } => shares(query, dirs),
         Command::Logout => {
             if config::clear_credentials()? {
                 println!("logged out; run `seekr` to log in again");
@@ -122,6 +131,53 @@ async fn run_tui() -> anyhow::Result<()> {
         .init();
 
     tui::run(config::load_or_default()?).await
+}
+
+fn shares(query: Option<String>, dirs: Vec<std::path::PathBuf>) -> anyhow::Result<()> {
+    use seekr_net::shares::{MAX_SEARCH_RESULTS, MetadataCache, ShareIndex};
+
+    let cfg = config::load_or_default()?;
+    let dirs = if dirs.is_empty() {
+        cfg.shared_dirs()?
+    } else {
+        dirs
+    };
+    let cache_path = cfg.client_config()?.share_cache;
+    let old = cache_path
+        .as_deref()
+        .map(MetadataCache::load)
+        .unwrap_or_default();
+    let started = std::time::Instant::now();
+    let report = ShareIndex::scan(&dirs, &old);
+    if let Some(path) = &cache_path {
+        report.cache.save(path)?;
+    }
+    for dir in &dirs {
+        println!("shared: {}", config::display_path(dir));
+    }
+    for e in &report.errors {
+        println!("warning: {e}");
+    }
+    let index = report.index;
+    println!(
+        "{} files in {} folders (scanned in {:.1}s)",
+        index.file_count(),
+        index.folder_count(),
+        started.elapsed().as_secs_f64()
+    );
+    if let Some(query) = query {
+        let results = index.search(&query, MAX_SEARCH_RESULTS);
+        println!("\n{} results for {query:?}:", results.len());
+        for f in results.iter().take(20) {
+            println!(
+                "  {}  {}  {}",
+                f.filename,
+                search::human_size(f.size),
+                search::quality(f)
+            );
+        }
+    }
+    Ok(())
 }
 
 async fn login(listen_secs: u64) -> anyhow::Result<()> {
@@ -217,7 +273,23 @@ fn print_event(event: &Event) -> bool {
             state,
             ..
         } => println!("[{username}] {filename}: {state:?}"),
-        Event::ServerMessage(_) | Event::ListenPort { .. } => {}
+        Event::Upload {
+            username,
+            filename,
+            state,
+            ..
+        } => println!("[{username}] upload {filename}: {state:?}"),
+        Event::SharesScanned {
+            folders,
+            files,
+            errors,
+        } => {
+            println!("sharing {files} files in {folders} folders");
+            for e in errors {
+                println!("  warning: {e}");
+            }
+        }
+        Event::ServerMessage(_) | Event::ListenPort { .. } | Event::SharesScanning => {}
         Event::ServerClosed { reason } => {
             println!("server connection closed: {reason}");
             return false;

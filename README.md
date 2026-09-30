@@ -39,7 +39,11 @@ you type `seekr`, search, and download whole albums in a few keystrokes.
 - **One-key downloads:** `d` on a file or a whole folder. Interrupted downloads resume
   from where they stopped (`.part` files), and name clashes never overwrite anything.
 - **Transfer view:** live progress, speed, queue position and failure reasons, with
-  retry and cancel.
+  retry and cancel. The download list survives restarts, and unfinished downloads
+  continue where they stopped.
+- **Sharing:** your music folders (default `~/Music`) can be searched, browsed and
+  downloaded by other users. Audio properties are read once and cached, and uploads
+  are spread fairly over a configurable number of slots.
 - **Quality at a glance:** bitrate, sample rate and bit depth, duration and size for
   every file and folder.
 - **Solid networking:** direct and firewall-piercing (indirect) peer connections are
@@ -61,7 +65,8 @@ scripts/install.sh          # builds and installs to ~/.local/bin/seekr
 
 Then run `seekr`. If your shell cannot find it, add `~/.local/bin` to your `PATH`; the
 script prints how. To install somewhere else, use `PREFIX=/usr/local sudo -E scripts/install.sh`.
-To remove seekr, run `scripts/install.sh --uninstall`.
+To remove seekr, run `scripts/uninstall.sh`. It keeps your login and settings unless
+you add `--purge`, and it never touches downloaded music.
 
 Alternatively: `cargo install --git https://github.com/DarkAaronfox/seekr seekr`.
 
@@ -99,7 +104,7 @@ Without this, you can still download from peers that are reachable themselves.
 | Where | Key | Action |
 |---|---|---|
 | everywhere | `/` | focus the search box |
-| | `Tab`, `1`, `2`, `3` | switch between Search, Transfers and Settings |
+| | `Tab`, `1`–`4` | switch between Search, Downloads, Uploads and Settings |
 | | `q` | quit (asks again while downloads are running) |
 | search box | `Enter` | search |
 | | `Esc` | back to the results |
@@ -109,9 +114,11 @@ Without this, you can still download from peers that are reachable themselves.
 | | `l`/`h` | expand or collapse |
 | | `d` | download the file or the whole folder |
 | | `f` / `F` | next or previous format filter |
-| transfers | `c` | cancel |
+| downloads | `c` | cancel |
 | | `r` | retry a failed download |
 | | `x` | clear finished downloads |
+| uploads | `c` | cancel |
+| | `x` | clear finished uploads |
 | settings | `Enter` | edit the selected folder (`Tab` completes the path) |
 | | `a` / `x` | add or remove a shared folder |
 
@@ -122,6 +129,7 @@ seekr                                   # the TUI
 seekr search "artist album" --full-paths
 seekr download <user> '<remote\path\to\file.flac>'
 seekr userinfo <user>                   # test a peer connection
+seekr shares ["query"]                  # what you share, and what a search would find
 seekr logout                            # forget saved credentials
 seekr config-path                       # where the config lives
 ```
@@ -137,12 +145,17 @@ username = "..."                        # written by the login screen
 password = "..."
 download_dir = "~/Downloads/seekr"      # default
 shared_dirs = ["~/Music"]               # default
+upload_slots = 2                        # default
 listen_port = 2234                      # default
 server = "server.slsknet.org:2242"      # default
 ```
 
-While the TUI runs, logs go to `~/.local/state/seekr/seekr.log`. Set `RUST_LOG=debug`
-for more detail.
+| File | Contents |
+|---|---|
+| `~/.config/seekr/config.toml` | login and settings |
+| `~/.local/share/seekr/downloads.json` | the download list |
+| `~/.cache/seekr/shares.json` | cached audio properties of shared files |
+| `~/.local/state/seekr/seekr.log` | log of the last TUI session (`RUST_LOG=debug` for more) |
 
 ## Security
 
@@ -162,7 +175,7 @@ for more detail.
 
 - [x] Login, peer connections (direct and indirect), search, downloads with resume
 - [x] TUI with folder view, format filter and transfer list
-- [ ] Sharing your music library (`~/Music`) and serving uploads
+- [x] Sharing your music library and serving uploads
 - [ ] Distributed search network
 - [ ] Browsing a user's shares, private messages, wishlist
 - [ ] Automatic port mapping (UPnP / NAT-PMP)

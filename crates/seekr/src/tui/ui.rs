@@ -6,9 +6,9 @@ use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Paragraph, Row as TableRow, Table, TableState, Tabs};
-use seekr_net::DownloadState;
+use seekr_net::{DownloadState, UploadState};
 
-use super::app::{App, Focus, Tab};
+use super::app::{App, Focus, SharesStatus, Tab};
 use super::results::{FormatFilter, Row};
 use super::settings::Item;
 use crate::config::{self, display_path};
@@ -29,6 +29,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     match app.tab {
         Tab::Search => render_search(frame, app, body),
         Tab::Transfers => render_transfers(frame, app, body),
+        Tab::Uploads => render_uploads(frame, app, body),
         Tab::Settings => render_settings(frame, app, body),
     }
     frame.render_widget(
@@ -39,21 +40,20 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 }
 
 fn render_header(frame: &mut Frame, app: &App, area: Rect) {
-    let active = app.transfers.active();
+    let counted = |label: &str, n: usize| {
+        Line::from(if n > 0 {
+            format!(" {label} ({n}) ")
+        } else {
+            format!(" {label} ")
+        })
+    };
     let titles = vec![
         Line::from(" 1 Search "),
-        Line::from(if active > 0 {
-            format!(" 2 Transfers ({active}) ")
-        } else {
-            " 2 Transfers ".to_owned()
-        }),
-        Line::from(" 3 Settings "),
+        counted("2 Downloads", app.transfers.active()),
+        counted("3 Uploads", app.uploads.active()),
+        Line::from(" 4 Settings "),
     ];
-    let selected = match app.tab {
-        Tab::Search => 0,
-        Tab::Transfers => 1,
-        Tab::Settings => 2,
-    };
+    let selected = app.tab.index();
     frame.render_widget(
         Tabs::new(titles)
             .select(selected)
@@ -62,11 +62,21 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         area,
     );
 
-    let speed = app.transfers.total_speed();
+    let down = app.transfers.total_speed();
+    let up = app.uploads.total_speed();
     let mut right = vec![];
-    if speed > 0.0 {
-        right.push(Span::raw(format!("↓ {}/s  ", human_size(speed as u64))));
+    if down > 0.0 {
+        right.push(Span::raw(format!("↓ {}/s  ", human_size(down as u64))));
     }
+    if up > 0.0 {
+        right.push(Span::raw(format!("↑ {}/s  ", human_size(up as u64))));
+    }
+    right.push(match &app.shares {
+        SharesStatus::Scanning => Span::raw("scanning shares  ").dark_gray(),
+        SharesStatus::Ready { files, .. } => {
+            Span::raw(format!("sharing {files} files  ")).dark_gray()
+        }
+    });
     right.push(Span::raw(format!("{} ", app.username)));
     right.push(if app.connected {
         Span::raw("● online ").green()
@@ -261,8 +271,8 @@ fn render_transfers(frame: &mut Frame, app: &mut App, area: Rect) {
                     DownloadState::Transferring { received, size } => (
                         Span::raw("downloading").cyan(),
                         progress_bar(*received, *size, 20),
-                        if t.speed > 0.0 {
-                            format!("{}/s", human_size(t.speed as u64))
+                        if t.meter.speed > 0.0 {
+                            format!("{}/s", human_size(t.meter.speed as u64))
                         } else {
                             String::new()
                         },
@@ -324,6 +334,90 @@ fn render_transfers(frame: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
+fn render_uploads(frame: &mut Frame, app: &mut App, area: Rect) {
+    let completed = app.uploads.completed;
+    let block = Block::bordered()
+        .title(format!(" Uploads · {completed} completed this session "))
+        .border_style(Style::new().cyan());
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    if app.uploads.list.is_empty() {
+        let hint = match &app.shares {
+            SharesStatus::Ready { files: 0, .. } => {
+                "you share nothing yet – add a folder in Settings (4)"
+            }
+            _ => "nobody is downloading from you right now",
+        };
+        frame.render_widget(Paragraph::new(hint).dark_gray(), inner);
+        return;
+    }
+
+    let height = inner.height as usize;
+    app.page_size = height;
+    let selected = app.uploads.selected;
+    app.uploads_offset = scroll(app.uploads_offset, selected, height);
+    let offset = app.uploads_offset;
+    let rows: Vec<TableRow> = app
+        .uploads
+        .list
+        .iter()
+        .skip(offset)
+        .take(height)
+        .map(|u| {
+            let (status, bar, speed) = match &u.state {
+                UploadState::Queued => {
+                    (Span::raw("queued").yellow(), Line::default(), String::new())
+                }
+                UploadState::Starting => (
+                    Span::raw("starting").yellow(),
+                    Line::default(),
+                    String::new(),
+                ),
+                UploadState::Transferring { sent, size } => (
+                    Span::raw("uploading").cyan(),
+                    progress_bar(*sent, *size, 20),
+                    if u.meter.speed > 0.0 {
+                        format!("{}/s", human_size(u.meter.speed as u64))
+                    } else {
+                        String::new()
+                    },
+                ),
+                UploadState::Completed => (
+                    Span::raw("done").green(),
+                    progress_bar(1, 1, 20),
+                    String::new(),
+                ),
+                UploadState::Failed { reason } => (
+                    Span::raw("failed").red(),
+                    Line::from(reason.clone()).dark_gray(),
+                    String::new(),
+                ),
+            };
+            TableRow::new(vec![
+                Cell::from(status),
+                Cell::from(bar),
+                Cell::from(speed),
+                Cell::from(u.username.clone()).cyan(),
+                Cell::from(u.basename().to_owned()),
+            ])
+        })
+        .collect();
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(12),
+            Constraint::Length(26),
+            Constraint::Length(11),
+            Constraint::Length(18),
+            Constraint::Fill(1),
+        ],
+    )
+    .row_highlight_style(SELECTED);
+    let mut state = TableState::new().with_selected(Some(selected - offset));
+    frame.render_stateful_widget(table, inner, &mut state);
+}
+
 fn help_line(app: &App) -> &'static str {
     match (app.tab, app.focus) {
         (Tab::Search, Focus::Input) => " Enter search · Esc results · Ctrl-u clear · Ctrl-c quit",
@@ -331,7 +425,10 @@ fn help_line(app: &App) -> &'static str {
             " j/k move · Enter open folder · h/l collapse/expand · d download · f/F format filter · / search · Tab transfers · q quit"
         }
         (Tab::Transfers, _) => {
-            " j/k move · c cancel · r retry failed · x clear finished · / search · Tab settings · q quit"
+            " j/k move · c cancel · r retry failed · x clear finished · / search · Tab uploads · q quit"
+        }
+        (Tab::Uploads, _) => {
+            " j/k move · c cancel · x clear finished · / search · Tab settings · q quit"
         }
         (Tab::Settings, _) if app.settings.is_editing() => {
             " Tab complete folder · Enter save · Esc cancel · Ctrl-u clear"
@@ -392,8 +489,16 @@ fn render_settings(frame: &mut Frame, app: &mut App, area: Rect) {
     lines.push(Line::default());
     lines.push(Line::from("Shared folders").bold());
     lines.push(
-        Line::from("  Music you offer to other users (sharing starts in a coming version).")
-            .dark_gray(),
+        Line::from("  Music other users can search, browse and download from you.").dark_gray(),
+    );
+    lines.push(
+        Line::from(match &app.shares {
+            SharesStatus::Scanning => "  scanning...".to_owned(),
+            SharesStatus::Ready { folders, files } => {
+                format!("  sharing {files} files in {folders} folders")
+            }
+        })
+        .green(),
     );
     for (i, dir) in s.shared.iter().enumerate() {
         push_item(&mut lines, i + 2, Item::Shared(i), display_path(dir));

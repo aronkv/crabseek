@@ -11,8 +11,12 @@ repository.workspace = true
 [dependencies]
 bytes = "1.12.1"
 futures = "0.3.34"
+lofty = "0.24.0"
 seekr-proto = { version = "0.1.0", path = "../proto" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 thiserror = "2.0.21"
 tokio = { version = "1.53.1", features = ["full"] }
 tokio-util = { version = "0.7.19", features = ["codec"] }
 tracing = "0.1.44"
+walkdir = "2.5.0"

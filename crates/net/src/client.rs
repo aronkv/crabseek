@@ -3,8 +3,10 @@
 //! [`Event`]s.
 
 mod downloads;
+mod sharing;
+mod uploads;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -23,9 +25,12 @@ use tokio::sync::mpsc;
 use crate::connect;
 use crate::peer::{self, ConnId, PeerHandle};
 use crate::server::{self, LoginError, LoginInfo, ServerConnection, ServerReader, ServerWriter};
+use crate::shares::ShareIndex;
 
 use downloads::Download;
 pub use downloads::{DownloadId, DownloadState};
+use uploads::Upload;
+pub use uploads::{UploadId, UploadState};
 
 /// Give up on a peer if neither the direct nor the indirect attempt has
 /// produced a connection by then.
@@ -41,6 +46,11 @@ pub struct ClientConfig {
     pub password: String,
     pub listen_port: u16,
     pub download_dir: PathBuf,
+    pub shared_dirs: Vec<PathBuf>,
+    /// Where audio properties of shared files are cached between runs.
+    pub share_cache: Option<PathBuf>,
+    /// Uploads that may run at the same time.
+    pub upload_slots: usize,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -94,6 +104,21 @@ pub enum Event {
         filename: String,
         state: DownloadState,
     },
+    /// An upload changed state (also sent for progress).
+    Upload {
+        id: UploadId,
+        username: String,
+        filename: String,
+        state: UploadState,
+    },
+    /// The shared folders are being (re)scanned.
+    SharesScanning,
+    SharesScanned {
+        folders: usize,
+        files: usize,
+        /// Shared folders that could not be read.
+        errors: Vec<String>,
+    },
     /// Outcome of [`Client::set_listen_port`].
     ListenPort {
         port: u16,
@@ -137,6 +162,7 @@ impl Client {
 
         let (tx, rx) = mpsc::unbounded_channel();
         let tokens = Tokens::new();
+        let _ = tx.send(Internal::RescanShares(cfg.shared_dirs.clone()));
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         tokio::spawn(read_server(server_reader, tx.clone()));
@@ -168,6 +194,13 @@ impl Client {
                 downloads: HashMap::new(),
                 download_dir: cfg.download_dir,
                 accept_task,
+                shares: Arc::new(ShareIndex::default()),
+                shared_dirs: cfg.shared_dirs,
+                share_cache: cfg.share_cache,
+                uploads: BTreeMap::new(),
+                next_upload_id: 0,
+                upload_slots: cfg.upload_slots.max(1),
+                upload_speed: 0,
             }
             .run(rx),
         );
@@ -245,6 +278,27 @@ impl Client {
     }
 
     /// Where downloads that start from now on are saved.
+    /// Rescans the shared folders (e.g. after they changed). Progress
+    /// arrives as [`Event::SharesScanning`] and [`Event::SharesScanned`].
+    pub fn rescan_shares(&self, dirs: Vec<PathBuf>) -> Result<(), ShutDown> {
+        self.tx
+            .send(Internal::RescanShares(dirs))
+            .map_err(|_| ShutDown)
+    }
+
+    pub fn cancel_upload(&self, id: UploadId) -> Result<(), ShutDown> {
+        self.tx
+            .send(Internal::CancelUpload { id })
+            .map_err(|_| ShutDown)
+    }
+
+    /// Forgets finished uploads.
+    pub fn clear_finished_uploads(&self) -> Result<(), ShutDown> {
+        self.tx
+            .send(Internal::ClearFinishedUploads)
+            .map_err(|_| ShutDown)
+    }
+
     /// Moves the listener to another port and tells the server. The result
     /// arrives as [`Event::ListenPort`]; on failure the old port stays.
     pub fn set_listen_port(&self, port: u16) -> Result<(), ShutDown> {
@@ -310,6 +364,31 @@ pub(crate) enum Internal {
     SetDownloadDir(PathBuf),
     SetListenPort(u16),
     Ping,
+    RescanShares(Vec<PathBuf>),
+    SharesScanned {
+        index: ShareIndex,
+        errors: Vec<String>,
+    },
+    CancelUpload {
+        id: UploadId,
+    },
+    ClearFinishedUploads,
+    UploadTimeout {
+        id: UploadId,
+        token: u32,
+    },
+    UploadConnectFailed {
+        id: UploadId,
+        reason: String,
+    },
+    UploadProgress {
+        id: UploadId,
+        sent: u64,
+    },
+    UploadDone {
+        id: UploadId,
+        result: io::Result<(u64, Duration)>,
+    },
     /// An `F` connection whose `FileTransferInit` has been read.
     FileConnection {
         username: String,
@@ -358,12 +437,22 @@ pub(crate) enum Internal {
     },
 }
 
+/// What an outgoing connection is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Purpose {
+    /// The one `P` connection to a user.
+    Peer,
+    /// The `F` connection of one of our uploads.
+    Upload(UploadId),
+}
+
 /// An outgoing connection attempt, keyed by the token we sent in
 /// `ConnectToPeer`. The direct attempt and the indirect one race; the
 /// first to succeed wins.
 struct Pending {
     username: String,
     conn_type: ConnectionType,
+    purpose: Purpose,
     direct_error: Option<String>,
     indirect_failed: bool,
 }
@@ -386,6 +475,15 @@ struct Actor {
     downloads: HashMap<DownloadId, Download>,
     download_dir: PathBuf,
     accept_task: tokio::task::AbortHandle,
+    shares: Arc<ShareIndex>,
+    shared_dirs: Vec<PathBuf>,
+    share_cache: Option<PathBuf>,
+    /// In queue order.
+    uploads: BTreeMap<UploadId, Upload>,
+    next_upload_id: UploadId,
+    upload_slots: usize,
+    /// Speed of our last finished upload, reported in search results.
+    upload_speed: u32,
 }
 
 impl Actor {
@@ -410,6 +508,18 @@ impl Actor {
                 Internal::SetDownloadDir(dir) => self.download_dir = dir,
                 Internal::SetListenPort(port) => self.set_listen_port(port).await,
                 Internal::Ping => self.send_server(ServerRequest::Ping).await,
+                Internal::RescanShares(dirs) => self.rescan_shares(dirs),
+                Internal::SharesScanned { index, errors } => {
+                    self.on_shares_scanned(index, errors).await
+                }
+                Internal::CancelUpload { id } => self.cancel_upload(id).await,
+                Internal::ClearFinishedUploads => self.clear_finished_uploads(),
+                Internal::UploadTimeout { id, token } => self.on_upload_timeout(id, token).await,
+                Internal::UploadConnectFailed { id, reason } => {
+                    self.fail_upload_connection(id, reason).await
+                }
+                Internal::UploadProgress { id, sent } => self.on_upload_progress(id, sent),
+                Internal::UploadDone { id, result } => self.on_upload_done(id, result).await,
                 Internal::FileConnection {
                     username,
                     token,
@@ -459,7 +569,9 @@ impl Actor {
                         self.fail(token, "timed out".to_owned());
                     }
                 }
-                Internal::PeerMessage { username, msg } => self.on_peer_message(username, msg),
+                Internal::PeerMessage { username, msg } => {
+                    self.on_peer_message(username, msg).await
+                }
                 Internal::PeerClosed {
                     id,
                     username,
@@ -513,18 +625,25 @@ impl Actor {
             return;
         }
         self.outbox.insert(username.clone(), vec![msg]);
-        self.start_connect(username, ConnectionType::Peer).await;
+        self.start_connect(username, ConnectionType::Peer, Purpose::Peer)
+            .await;
     }
 
     /// Starts the direct and the indirect attempt at the same time, which
     /// is what current clients do ("modern" order in the spec).
-    async fn start_connect(&mut self, username: String, conn_type: ConnectionType) {
+    async fn start_connect(
+        &mut self,
+        username: String,
+        conn_type: ConnectionType,
+        purpose: Purpose,
+    ) {
         let token = self.tokens.next();
         self.pending.insert(
             token,
             Pending {
                 username: username.clone(),
                 conn_type,
+                purpose,
                 direct_error: None,
                 indirect_failed: false,
             },
@@ -594,6 +713,11 @@ impl Actor {
                     self.fail_if_exhausted(token);
                 }
             }
+            ServerResponse::FileSearch {
+                username,
+                token,
+                query,
+            } => self.on_search_request(username, token, query).await,
             other => self.emit(Event::ServerMessage(other)),
         }
     }
@@ -630,11 +754,9 @@ impl Actor {
     }
 
     fn on_connected(&mut self, p: Pending, stream: TcpStream, method: ConnectMethod) {
-        match p.conn_type {
-            ConnectionType::Peer => self.register_peer(p.username, stream, method),
-            other => {
-                tracing::info!(username = %p.username, ?other, "dropping connection (not implemented)")
-            }
+        match p.purpose {
+            Purpose::Peer => self.register_peer(p.username, stream, method),
+            Purpose::Upload(id) => self.on_upload_connection(id, stream),
         }
     }
 
@@ -651,13 +773,13 @@ impl Actor {
         }
         // Other attempts to reach this user are no longer needed.
         self.pending
-            .retain(|_, p| !(p.username == username && p.conn_type == ConnectionType::Peer));
+            .retain(|_, p| !(p.username == username && p.purpose == Purpose::Peer));
         // Only one P connection per user; the old one closes when dropped.
         self.peers.insert(username.clone(), handle);
         self.emit(Event::PeerConnected { username, method });
     }
 
-    fn on_peer_message(&mut self, username: String, msg: PeerMsg) {
+    async fn on_peer_message(&mut self, username: String, msg: PeerMsg) {
         match msg {
             PeerMsg::FileSearchResponse(resp) => {
                 if self.searches.contains(&resp.token) {
@@ -668,11 +790,17 @@ impl Actor {
             }
             PeerMsg::UserInfoRequest => {
                 if let Some(handle) = self.peers.get(&username) {
-                    handle.send(PeerMsg::UserInfoResponse(own_user_info()));
+                    handle.send(PeerMsg::UserInfoResponse(self.own_user_info()));
                 }
                 self.emit(Event::PeerMessage { username, msg });
             }
             msg => {
+                let Some(msg) = self.on_browse_message(&username, msg) else {
+                    return;
+                };
+                let Some(msg) = self.on_upload_message(&username, msg).await else {
+                    return;
+                };
                 if let Some(msg) = self.on_transfer_message(&username, msg) {
                     self.emit(Event::PeerMessage { username, msg });
                 }
@@ -694,9 +822,17 @@ impl Actor {
         let Some(p) = self.pending.remove(&token) else {
             return;
         };
-        if p.conn_type == ConnectionType::Peer {
-            self.outbox.remove(&p.username);
-            self.fail_queued_downloads(&p.username, &reason);
+        match p.purpose {
+            Purpose::Peer => {
+                self.outbox.remove(&p.username);
+                self.fail_queued_downloads(&p.username, &reason);
+            }
+            Purpose::Upload(id) => {
+                let _ = self.internal.send(Internal::UploadConnectFailed {
+                    id,
+                    reason: reason.clone(),
+                });
+            }
         }
         self.emit(Event::PeerConnectFailed {
             username: p.username,
@@ -705,14 +841,17 @@ impl Actor {
     }
 }
 
-fn own_user_info() -> UserInfo {
-    UserInfo {
-        description: "seekr – Soulseek client in Rust".to_owned(),
-        picture: None,
-        total_uploads: 0,
-        queue_size: 0,
-        slots_free: false,
-        upload_permitted: Some(0),
+impl Actor {
+    fn own_user_info(&self) -> UserInfo {
+        UserInfo {
+            description: "seekr – Soulseek client in Rust".to_owned(),
+            picture: None,
+            total_uploads: self.uploads.values().filter(|u| u.is_completed()).count() as u32,
+            queue_size: self.upload_queue_len() as u32,
+            slots_free: self.upload_slot_free(),
+            // Nobody may push files to us unasked.
+            upload_permitted: Some(0),
+        }
     }
 }
 

@@ -6,6 +6,7 @@ mod results;
 mod settings;
 mod transfers;
 mod ui;
+mod uploads;
 
 use std::time::Duration;
 
@@ -287,7 +288,7 @@ mod tests {
         assert!(screen.contains("downloading"));
         assert!(screen.contains("50%"));
         assert!(screen.contains("done"));
-        assert!(screen.contains("2 Transfers (1)"));
+        assert!(screen.contains("2 Downloads (1)"));
     }
 
     #[test]

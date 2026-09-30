@@ -6,22 +6,50 @@ use seekr_net::{DownloadId, DownloadState};
 
 use crate::persist::{SavedDownload, SavedStatus};
 
+/// Smoothed bytes-per-second from progress samples.
+#[derive(Default)]
+pub struct SpeedMeter {
+    pub speed: f64,
+    last_sample: Option<(Instant, u64)>,
+}
+
+impl SpeedMeter {
+    pub fn sample(&mut self, bytes: u64) {
+        let now = Instant::now();
+        if let Some((then, before)) = self.last_sample {
+            let secs = now.duration_since(then).as_secs_f64();
+            if secs > 0.0 && bytes >= before {
+                let sample = (bytes - before) as f64 / secs;
+                self.speed = if self.speed == 0.0 {
+                    sample
+                } else {
+                    0.7 * self.speed + 0.3 * sample
+                };
+            }
+        }
+        self.last_sample = Some((now, bytes));
+    }
+
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
+pub fn basename(path: &str) -> &str {
+    path.rsplit(['\\', '/']).next().unwrap_or(path)
+}
+
 pub struct Transfer {
     pub id: DownloadId,
     pub username: String,
     pub filename: String,
     pub state: DownloadState,
-    /// Bytes per second, smoothed.
-    pub speed: f64,
-    last_sample: Option<(Instant, u64)>,
+    pub meter: SpeedMeter,
 }
 
 impl Transfer {
     pub fn basename(&self) -> &str {
-        self.filename
-            .rsplit(['\\', '/'])
-            .next()
-            .unwrap_or(&self.filename)
+        basename(&self.filename)
     }
 
     pub fn is_finished(&self) -> bool {
@@ -49,7 +77,6 @@ impl Transfers {
         filename: String,
         state: DownloadState,
     ) {
-        let now = Instant::now();
         let t = match self.list.iter_mut().find(|t| t.id == id) {
             Some(t) => {
                 if std::mem::discriminant(&t.state) != std::mem::discriminant(&state) {
@@ -64,28 +91,15 @@ impl Transfers {
                     username,
                     filename,
                     state: state.clone(),
-                    speed: 0.0,
-                    last_sample: None,
+                    meter: SpeedMeter::default(),
                 });
                 self.list.last_mut().unwrap()
             }
         };
         if let DownloadState::Transferring { received, .. } = state {
-            if let Some((then, before)) = t.last_sample {
-                let secs = now.duration_since(then).as_secs_f64();
-                if secs > 0.0 && received >= before {
-                    let sample = (received - before) as f64 / secs;
-                    t.speed = if t.speed == 0.0 {
-                        sample
-                    } else {
-                        0.7 * t.speed + 0.3 * sample
-                    };
-                }
-            }
-            t.last_sample = Some((now, received));
+            t.meter.sample(received);
         } else {
-            t.speed = 0.0;
-            t.last_sample = None;
+            t.meter.reset();
         }
         t.state = state;
     }
@@ -152,7 +166,7 @@ impl Transfers {
         self.list
             .iter()
             .filter(|t| matches!(t.state, DownloadState::Transferring { .. }))
-            .map(|t| t.speed)
+            .map(|t| t.meter.speed)
             .sum()
     }
 }

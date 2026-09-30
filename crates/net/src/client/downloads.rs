@@ -19,9 +19,6 @@ pub type DownloadId = u64;
 /// Give up if the uploader accepted but never opens the file connection.
 const FILE_CONNECTION_TIMEOUT: Duration = Duration::from_secs(60);
 
-/// What we tell peers that try to download from us until sharing exists.
-const NOT_SHARED: &str = "File not shared.";
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DownloadState {
     /// Waiting in the peer's upload queue; `place` once they tell us.
@@ -165,26 +162,6 @@ impl Actor {
                 };
                 self.reply(username, response);
             }
-            PeerMsg::TransferRequest {
-                direction: TransferDirection::Download,
-                token,
-                ..
-            } => self.reply(
-                username,
-                PeerMsg::TransferResponse {
-                    token,
-                    allowed: false,
-                    size: None,
-                    reason: Some(NOT_SHARED.to_owned()),
-                },
-            ),
-            PeerMsg::QueueUpload { filename } => self.reply(
-                username,
-                PeerMsg::UploadDenied {
-                    filename,
-                    reason: NOT_SHARED.to_owned(),
-                },
-            ),
             PeerMsg::PlaceInQueueResponse { filename, place } => {
                 if let Some(id) = self.find_download(username, &filename)
                     && matches!(self.downloads[&id].state, DownloadState::Queued { .. })

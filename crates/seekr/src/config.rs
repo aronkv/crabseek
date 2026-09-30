@@ -28,6 +28,9 @@ pub struct Config {
     download_dir: Option<PathBuf>,
     /// Folders offered to other users. Defaults to `~/Music`.
     shared_dirs: Option<Vec<PathBuf>>,
+    /// Uploads that may run at the same time.
+    #[serde(default = "default_upload_slots")]
+    pub upload_slots: usize,
 }
 
 impl Default for Config {
@@ -42,6 +45,10 @@ fn default_server() -> String {
 
 fn default_port() -> u16 {
     2234
+}
+
+fn default_upload_slots() -> usize {
+    2
 }
 
 impl Config {
@@ -84,6 +91,9 @@ impl Config {
             password: self.password.clone(),
             listen_port: self.listen_port,
             download_dir: self.download_dir()?,
+            shared_dirs: self.shared_dirs()?,
+            share_cache: Some(project_dirs()?.cache_dir().join("shares.json")),
+            upload_slots: self.upload_slots,
         })
     }
 }

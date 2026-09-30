@@ -9,6 +9,7 @@ use seekr_net::{Client, DownloadState, Event};
 use super::results::Results;
 use super::settings::{Settings, SettingsAction};
 use super::transfers::Transfers;
+use super::uploads::Uploads;
 use crate::config::{self, Config};
 use crate::persist::{self, SavedDownload, SavedStatus};
 
@@ -16,7 +17,28 @@ use crate::persist::{self, SavedDownload, SavedStatus};
 pub enum Tab {
     Search,
     Transfers,
+    Uploads,
     Settings,
+}
+
+impl Tab {
+    const ORDER: [Tab; 4] = [Tab::Search, Tab::Transfers, Tab::Uploads, Tab::Settings];
+
+    pub fn index(self) -> usize {
+        Self::ORDER.iter().position(|t| *t == self).unwrap()
+    }
+
+    fn cycle(self, delta: isize) -> Tab {
+        let n = Self::ORDER.len() as isize;
+        Self::ORDER[(self.index() as isize + delta).rem_euclid(n) as usize]
+    }
+}
+
+/// What we currently share, as last reported by the client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SharesStatus {
+    Scanning,
+    Ready { folders: usize, files: usize },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -43,6 +65,9 @@ pub struct App {
     pub results_offset: usize,
     pub transfers: Transfers,
     pub transfers_offset: usize,
+    pub uploads: Uploads,
+    pub uploads_offset: usize,
+    pub shares: SharesStatus,
     pub settings: Settings,
     pub status: String,
     pub connected: bool,
@@ -73,6 +98,9 @@ impl App {
             results_offset: 0,
             transfers: Transfers::default(),
             transfers_offset: 0,
+            uploads: Uploads::default(),
+            uploads_offset: 0,
+            shares: SharesStatus::Scanning,
             settings: Settings::new(cfg.download_dir()?, cfg.listen_port, cfg.shared_dirs()?),
             status: String::new(),
             connected: true,
@@ -156,6 +184,23 @@ impl App {
                 }
                 self.transfers.update(id, username, filename, state);
             }
+            Event::Upload {
+                id,
+                username,
+                filename,
+                state,
+            } => self.uploads.update(id, username, filename, state),
+            Event::SharesScanning => self.shares = SharesStatus::Scanning,
+            Event::SharesScanned {
+                folders,
+                files,
+                errors,
+            } => {
+                self.shares = SharesStatus::Ready { folders, files };
+                if let Some(first) = errors.first() {
+                    self.status = format!("sharing problem: {first}");
+                }
+            }
             Event::ListenPort { port, result } => {
                 self.status = match result
                     .map_err(anyhow::Error::msg)
@@ -198,23 +243,12 @@ impl App {
 
         match key.code {
             KeyCode::Char('q') => self.request_quit(),
-            KeyCode::Tab => {
-                self.tab = match self.tab {
-                    Tab::Search => Tab::Transfers,
-                    Tab::Transfers => Tab::Settings,
-                    Tab::Settings => Tab::Search,
-                }
-            }
-            KeyCode::BackTab => {
-                self.tab = match self.tab {
-                    Tab::Search => Tab::Settings,
-                    Tab::Transfers => Tab::Search,
-                    Tab::Settings => Tab::Transfers,
-                }
-            }
+            KeyCode::Tab => self.tab = self.tab.cycle(1),
+            KeyCode::BackTab => self.tab = self.tab.cycle(-1),
             KeyCode::Char('1') => self.tab = Tab::Search,
             KeyCode::Char('2') => self.tab = Tab::Transfers,
-            KeyCode::Char('3') => self.tab = Tab::Settings,
+            KeyCode::Char('3') => self.tab = Tab::Uploads,
+            KeyCode::Char('4') => self.tab = Tab::Settings,
             KeyCode::Char('/') => {
                 self.tab = Tab::Search;
                 self.focus = Focus::Input;
@@ -222,6 +256,7 @@ impl App {
             _ => match self.tab {
                 Tab::Search => self.on_results_key(key),
                 Tab::Transfers => self.on_transfers_key(key),
+                Tab::Uploads => self.on_uploads_key(key),
                 Tab::Settings => self.on_settings_key(key),
             },
         }
@@ -242,11 +277,8 @@ impl App {
                 return;
             }
             SettingsAction::SetSharedDirs(dirs) => config::save_shared_dirs(&dirs).map(|()| {
-                format!(
-                    "saved {} shared folder{} (sharing starts in a coming version)",
-                    dirs.len(),
-                    if dirs.len() == 1 { "" } else { "s" }
-                )
+                let _ = self.client.rescan_shares(dirs);
+                "shared folders saved, rescanning...".to_owned()
             }),
         };
         self.status = match result {
@@ -255,13 +287,38 @@ impl App {
         };
     }
 
+    fn on_uploads_key(&mut self, key: KeyEvent) {
+        let page = self.page_size.max(1) as isize;
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => self.uploads.move_by(1),
+            KeyCode::Up | KeyCode::Char('k') => self.uploads.move_by(-1),
+            KeyCode::PageDown => self.uploads.move_by(page),
+            KeyCode::PageUp => self.uploads.move_by(-page),
+            KeyCode::Home | KeyCode::Char('g') => self.uploads.selected = 0,
+            KeyCode::End | KeyCode::Char('G') => self.uploads.move_by(isize::MAX),
+            KeyCode::Char('c') => {
+                if let Some(u) = self.uploads.selected()
+                    && !u.is_finished()
+                {
+                    let _ = self.client.cancel_upload(u.id);
+                }
+            }
+            KeyCode::Char('x') => {
+                let n = self.uploads.clear_finished();
+                let _ = self.client.clear_finished_uploads();
+                self.status = format!("cleared {n} finished uploads");
+            }
+            _ => {}
+        }
+    }
+
     fn request_quit(&mut self) {
-        let active = self.transfers.active();
+        let active = self.transfers.active() + self.uploads.active();
         if active == 0 || self.confirm_quit {
             self.quit = true;
         } else {
             self.confirm_quit = true;
-            self.status = format!("{active} downloads still active – press q again to quit");
+            self.status = format!("{active} transfers still active – press q again to quit");
         }
     }
 
