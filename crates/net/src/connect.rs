@@ -1,7 +1,7 @@
 //! Opening peer connections and reading their first (init) message.
 
 use std::io;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
@@ -16,9 +16,25 @@ pub const INIT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Init messages are a username and a couple of integers.
 const MAX_INIT_LEN: usize = 4096;
 
-/// Connects to `addr` and introduces ourselves with `PeerInit`.
+/// Addresses to try for a peer. The server reports the peer's public
+/// address; when that is our own public address, the peer runs behind the
+/// same router (often on this very machine), and many routers cannot
+/// connect a LAN host to its own public address ("NAT hairpin"). Then
+/// loopback is tried first. Our own listen port is skipped so we never
+/// connect to ourselves.
+pub fn candidates(addr: SocketAddr, own_ip: Ipv4Addr, own_port: u16) -> Vec<SocketAddr> {
+    let mut addrs = Vec::with_capacity(2);
+    if addr.ip() == IpAddr::V4(own_ip) && addr.port() != own_port {
+        addrs.push(SocketAddr::from((Ipv4Addr::LOCALHOST, addr.port())));
+    }
+    addrs.push(addr);
+    addrs
+}
+
+/// Connects to the first reachable address and introduces ourselves with
+/// `PeerInit`.
 pub async fn direct(
-    addr: SocketAddr,
+    addrs: &[SocketAddr],
     own_username: &str,
     conn_type: ConnectionType,
 ) -> io::Result<TcpStream> {
@@ -27,15 +43,26 @@ pub async fn direct(
         conn_type,
         token: 0,
     };
-    open(addr, &msg).await
+    open(addrs, &msg).await
 }
 
 /// Answers an indirect connection request with `PierceFireWall`.
-pub async fn pierce(addr: SocketAddr, token: u32) -> io::Result<TcpStream> {
-    open(addr, &PeerInitMsg::PierceFirewall { token }).await
+pub async fn pierce(addrs: &[SocketAddr], token: u32) -> io::Result<TcpStream> {
+    open(addrs, &PeerInitMsg::PierceFirewall { token }).await
 }
 
-async fn open(addr: SocketAddr, init: &PeerInitMsg) -> io::Result<TcpStream> {
+async fn open(addrs: &[SocketAddr], init: &PeerInitMsg) -> io::Result<TcpStream> {
+    let mut last_error = io::Error::new(io::ErrorKind::AddrNotAvailable, "no address");
+    for &addr in addrs {
+        match open_one(addr, init).await {
+            Ok(stream) => return Ok(stream),
+            Err(e) => last_error = e,
+        }
+    }
+    Err(last_error)
+}
+
+async fn open_one(addr: SocketAddr, init: &PeerInitMsg) -> io::Result<TcpStream> {
     if addr.ip().is_unspecified() || addr.port() == 0 {
         return Err(io::Error::new(
             io::ErrorKind::AddrNotAvailable,
@@ -100,7 +127,7 @@ mod tests {
     #[tokio::test]
     async fn direct_sends_peer_init() {
         let init =
-            accept_init(async |addr| direct(addr, "alice", ConnectionType::File).await).await;
+            accept_init(async |addr| direct(&[addr], "alice", ConnectionType::File).await).await;
         assert_eq!(
             init,
             PeerInitMsg::PeerInit {
@@ -113,13 +140,37 @@ mod tests {
 
     #[tokio::test]
     async fn pierce_sends_token() {
-        let init = accept_init(async |addr| pierce(addr, 1234).await).await;
+        let init = accept_init(async |addr| pierce(&[addr], 1234).await).await;
         assert_eq!(init, PeerInitMsg::PierceFirewall { token: 1234 });
+    }
+
+    #[test]
+    fn loopback_first_for_our_own_public_ip() {
+        let own = Ipv4Addr::new(94, 21, 69, 106);
+        let peer = SocketAddr::from((own, 2235));
+        assert_eq!(
+            candidates(peer, own, 2234),
+            [SocketAddr::from((Ipv4Addr::LOCALHOST, 2235)), peer]
+        );
+        // Our own port would be ourselves; other IPs are left alone.
+        assert_eq!(
+            candidates(SocketAddr::from((own, 2234)), own, 2234).len(),
+            1
+        );
+        let other = SocketAddr::from((Ipv4Addr::new(1, 2, 3, 4), 2235));
+        assert_eq!(candidates(other, own, 2234), [other]);
+    }
+
+    #[tokio::test]
+    async fn falls_back_to_the_next_address() {
+        let dead = SocketAddr::from((Ipv4Addr::LOCALHOST, 1));
+        let init = accept_init(async |addr| pierce(&[dead, addr], 9).await).await;
+        assert_eq!(init, PeerInitMsg::PierceFirewall { token: 9 });
     }
 
     #[tokio::test]
     async fn offline_peer_fails_fast() {
-        let err = direct("0.0.0.0:0".parse().unwrap(), "a", ConnectionType::Peer)
+        let err = direct(&["0.0.0.0:0".parse().unwrap()], "a", ConnectionType::Peer)
             .await
             .unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::AddrNotAvailable);

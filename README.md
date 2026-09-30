@@ -11,18 +11,18 @@
 </div>
 
 ```
-  1 Search    2 Transfers (3)                                     ↓ 8.8 MB/s  me ● online
-┌ Search ───────────────────────────────────────────────────────────────────────────────┐
-│boards of canada                                                                       │
-└───────────────────────────────────────────────────────────────────────────────────────┘
-┌ "boards of canada": 659 users, 49925 files (10s) · [FLAC] 412 folders ────────────────┐
-│▾ Boards of Canada\Geogaddi  (24)      FLAC 16/44.1   512.3 MB  alice    free 13.3 MB/s│
-│    01 - Ready Lets Go.flac            44.1kHz/16bit    4.4 MB                         │
-│    02 - Music Is Math.flac            44.1kHz/16bit   33.6 MB                         │
-│▸ Boards of Canada\Tomorrow's Harvest  FLAC 24/44.1   643.5 MB  bob      free 12.1 MB/s│
-│▸ Music Has the Right to Children (19) FLAC 16/44.1   367.1 MB  carol    queue 2       │
-└───────────────────────────────────────────────────────────────────────────────────────┘
- j/k move · Enter open folder · d download · f/F format filter · / search · Tab transfers
+  1 Search  2 Downloads (3)  3 Uploads  4 Settings   ↓ 8.8 MB/s  sharing 4210 files  me ● online
+┌ Search ────────────────────────────────────────────────────────────────────────────────────┐
+│boards of canada                                                                            │
+└────────────────────────────────────────────────────────────────────────────────────────────┘
+┌ "boards of canada": 659 users, 49925 files (10s) · [FLAC] 412 folders ─────────────────────┐
+│▾ Boards of Canada\Geogaddi  (24)     FLAC 16/44.1 ~903kbps   512.3 MB  alice free 13.3 MB/s│
+│    01 - Ready Lets Go.flac           44.1kHz/16bit ~1006kbps   4.4 MB                      │
+│    02 - Music Is Math.flac           44.1kHz/16bit ~836kbps   33.6 MB                      │
+│▸ Tomorrow's Harvest  (17)            FLAC 24/44.1 ~1914kbps  643.5 MB  bob   free 12.1 MB/s│
+│▸ Music Has the Right to Children (19) MP3 320kbps            151.2 MB  carol  queue 2      │
+└────────────────────────────────────────────────────────────────────────────────────────────┘
+ 10j/10k jump · Enter open folder · d download · f/F format filter · / search · Tab/Alt-1…4 tabs
 ```
 
 seekr speaks the Soulseek protocol natively. There is no daemon, web UI or Python runtime:
@@ -41,13 +41,18 @@ you type `seekr`, search, and download whole albums in a few keystrokes.
 - **Transfer view:** live progress, speed, queue position and failure reasons, with
   retry and cancel. The download list survives restarts, and unfinished downloads
   continue where they stopped.
-- **Sharing:** your music folders (default `~/Music`) can be searched, browsed and
-  downloaded by other users. Audio properties are read once and cached, and uploads
-  are spread fairly over a configurable number of slots.
-- **Quality at a glance:** bitrate, sample rate and bit depth, duration and size for
-  every file and folder.
+- **Sharing:** other users can browse and download from your music folders (default
+  `~/Music`) and find them through user and room searches. Network-wide searches
+  arrive over the distributed network, which is on the roadmap. Audio properties are
+  read once and cached, and uploads are spread fairly over a configurable number of
+  slots.
+- **Quality at a glance:** kbps for every file and folder (estimated from size and
+  length, marked `~`, when the peer does not send it), plus sample rate and bit depth
+  for lossless files, duration and size.
+- **Vim-style navigation:** `j`/`k`, counts like `10k` or `5G`, `g`/`G`.
 - **Solid networking:** direct and firewall-piercing (indirect) peer connections are
-  raced against each other, so peers behind NAT still work.
+  raced against each other, so peers behind NAT still work. Peers behind your own
+  router are reached locally.
 - **Scriptable CLI:** `seekr search`, `seekr download` and friends for quick checks
   and automation.
 
@@ -106,9 +111,9 @@ Without this, you can still download from peers that are reachable themselves.
 |---|---|---|
 | everywhere | `/` | focus the search box |
 | | `Tab`, `Alt-1`–`4`, `F1`–`F4` | switch between Search, Downloads, Uploads and Settings |
+| | `q`, `Ctrl-c` | quit (`q` asks again while transfers are running) |
 | lists | `10j`, `10k`, `10↑` … | vim-style counts: move 10 rows (the count shows bottom left) |
 | | `5G` | jump to row 5 |
-| | `q` | quit (asks again while downloads are running) |
 | search box | `Enter` | search |
 | | `Esc` | back to the results |
 | | `Ctrl-u` | clear |
@@ -122,7 +127,7 @@ Without this, you can still download from peers that are reachable themselves.
 | | `x` | clear finished downloads |
 | uploads | `c` | cancel |
 | | `x` | clear finished uploads |
-| settings | `Enter` | edit the selected folder (`Tab` completes the path) |
+| settings | `Enter` | edit the selected folder or port (`Tab` completes paths) |
 | | `a` / `x` | add or remove a shared folder |
 
 ### Command line
@@ -132,15 +137,15 @@ seekr                                   # the TUI
 seekr search "artist album" --full-paths
 seekr download <user> '<remote\path\to\file.flac>'
 seekr userinfo <user>                   # test a peer connection
-seekr shares ["query"]                  # what you share, and what a search would find
+seekr shares ["query"] [--dir PATH]     # what you share, and what a search would find
 seekr logout                            # forget saved credentials
 seekr config-path                       # where the config lives
 ```
 
 ## Configuration
 
-The download folder and the shared folders can be changed in the **Settings** tab
-(`3`); changes are saved immediately. Everything lives in
+The download folder, the listen port and the shared folders can be changed in the
+**Settings** tab (`4`); changes apply and are saved immediately. Everything lives in
 `~/.config/seekr/config.toml`, and every key except the credentials is optional:
 
 ```toml

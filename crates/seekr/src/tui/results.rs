@@ -116,19 +116,29 @@ impl Folder {
             return String::new();
         };
         let label = ext.to_uppercase();
+        let rates: Vec<(u32, bool)> = files.iter().filter_map(|f| kbps(f)).collect();
+        let estimated = rates.iter().any(|(_, e)| *e);
         let lossless = files
             .iter()
             .find(|f| !is_lossy(f) && f.sample_rate().is_some());
         if let Some(f) = lossless {
             let rate = f.sample_rate().unwrap() as f64 / 1000.0;
-            return match f.bit_depth() {
+            let mut out = match f.bit_depth() {
                 Some(depth) => format!("{label} {depth}/{rate}"),
                 None => format!("{label} {rate}kHz"),
             };
+            // Lossless bitrates vary per track, so the average says most.
+            if !rates.is_empty() {
+                let avg =
+                    rates.iter().map(|(k, _)| u64::from(*k)).sum::<u64>() / rates.len() as u64;
+                out.push(' ');
+                out.push_str(&format_kbps((avg as u32, estimated)));
+            }
+            return out;
         }
         // The lowest bitrate is the honest summary of a lossy folder.
-        match files.iter().filter_map(|f| kbps(f)).min_by_key(|(k, _)| *k) {
-            Some(k) => format!("{label} {}", format_kbps(k)),
+        match rates.iter().map(|(k, _)| *k).min() {
+            Some(min) => format!("{label} {}", format_kbps((min, estimated))),
             None => label,
         }
     }

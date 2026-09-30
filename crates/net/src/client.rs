@@ -181,6 +181,8 @@ impl Client {
         tokio::spawn(
             Actor {
                 own_username: cfg.username,
+                own_ip: info.own_ip,
+                listen_port: cfg.listen_port,
                 server: server_writer,
                 internal: tx.clone(),
                 events: event_tx,
@@ -459,6 +461,9 @@ struct Pending {
 
 struct Actor {
     own_username: String,
+    /// Our public address as the server sees it, and our listen port.
+    own_ip: Ipv4Addr,
+    listen_port: u16,
     server: ServerWriter,
     internal: mpsc::UnboundedSender<Internal>,
     events: mpsc::UnboundedSender<Event>,
@@ -590,6 +595,7 @@ impl Actor {
         let result = match TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).await {
             Ok(listener) => {
                 self.accept_task.abort();
+                self.listen_port = port;
                 self.accept_task =
                     tokio::spawn(accept_loop(listener, self.internal.clone())).abort_handle();
                 self.send_server(ServerRequest::SetWaitPort { port: port.into() })
@@ -668,10 +674,18 @@ impl Actor {
         });
     }
 
+    fn peer_addrs(&self, ip: Ipv4Addr, port: u32) -> Vec<SocketAddr> {
+        connect::candidates(
+            SocketAddr::from((ip, port as u16)),
+            self.own_ip,
+            self.listen_port,
+        )
+    }
+
     async fn on_server(&mut self, resp: ServerResponse) {
         match resp {
             ServerResponse::PeerAddress { username, ip, port } => {
-                let addr = SocketAddr::from((ip, port as u16));
+                let addrs = self.peer_addrs(ip, port);
                 for token in self.awaiting_address.remove(&username).unwrap_or_default() {
                     let Some(p) = self.pending.get(&token) else {
                         continue;
@@ -681,8 +695,9 @@ impl Actor {
                         p.conn_type,
                         self.internal.clone(),
                     );
+                    let addrs = addrs.clone();
                     tokio::spawn(async move {
-                        let result = connect::direct(addr, &own, conn_type).await;
+                        let result = connect::direct(&addrs, &own, conn_type).await;
                         let _ = tx.send(Internal::DirectDone { token, result });
                     });
                 }
@@ -695,10 +710,10 @@ impl Actor {
                 token,
                 ..
             } => {
-                let addr = SocketAddr::from((ip, port as u16));
+                let addrs = self.peer_addrs(ip, port);
                 let tx = self.internal.clone();
                 tokio::spawn(async move {
-                    let result = connect::pierce(addr, token).await;
+                    let result = connect::pierce(&addrs, token).await;
                     let _ = tx.send(Internal::PierceDone {
                         username,
                         conn_type,

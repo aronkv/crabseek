@@ -181,7 +181,7 @@ fn render_search(frame: &mut Frame, app: &mut App, area: Rect) {
         rows,
         [
             Constraint::Fill(1),
-            Constraint::Length(14),
+            Constraint::Length(22),
             Constraint::Length(9),
             Constraint::Length(18),
             Constraint::Length(20),

@@ -124,7 +124,9 @@ pub(crate) fn kbps(f: &SearchFile) -> Option<(u32, bool)> {
         return Some((bitrate, false));
     }
     let secs = u64::from(f.duration().filter(|&d| d > 0)?);
-    Some(((f.size * 8 / 1000 / secs) as u32, true))
+    // Tiny or bogus sizes give 0, which says nothing.
+    let estimate = (f.size * 8 / 1000 / secs) as u32;
+    (estimate > 0).then_some((estimate, true))
 }
 
 /// Lossy formats are described by bitrate, lossless ones by sample rate
@@ -152,10 +154,10 @@ pub(crate) fn quality(f: &SearchFile) -> String {
         (Some(rate), None) => Some(format!("{:.1}kHz", rate as f64 / 1000.0)),
         _ => None,
     };
-    match (is_lossy(f), sample) {
-        (false, Some(sample)) => parts.push(sample),
-        _ => parts.extend(kbps(f).map(format_kbps)),
+    if !is_lossy(f) {
+        parts.extend(sample);
     }
+    parts.extend(kbps(f).map(format_kbps));
     if let Some(secs) = f.duration() {
         parts.push(format!("{}:{:02}", secs / 60, secs % 60));
     }
@@ -213,6 +215,6 @@ mod tests {
             size: 40_000_000,
             ..aac.clone()
         };
-        assert_eq!(quality(&alac), "44.1kHz/16bit  3:20");
+        assert_eq!(quality(&alac), "44.1kHz/16bit  ~1600kbps  3:20");
     }
 }
