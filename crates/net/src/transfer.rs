@@ -108,8 +108,8 @@ pub async fn receive(
     stream.write_u64_le(offset).await?;
     progress(offset);
 
-    let mut file = BufWriter::with_capacity(256 * 1024, file);
-    let mut buf = vec![0; 64 * 1024];
+    let mut file = BufWriter::with_capacity(1024 * 1024, file);
+    let mut buf = vec![0; 256 * 1024];
     let mut received = offset;
     let mut last_report = Instant::now();
     while received < size {

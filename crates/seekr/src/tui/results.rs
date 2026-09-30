@@ -6,6 +6,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use seekr_proto::search::{SearchFile, SearchResponse};
 
+use crate::search::{format_kbps, is_lossy, kbps};
+
 pub type FolderId = usize;
 
 pub struct Folder {
@@ -114,15 +116,19 @@ impl Folder {
             return String::new();
         };
         let label = ext.to_uppercase();
-        if let Some(f) = files.iter().find(|f| f.sample_rate().is_some()) {
+        let lossless = files
+            .iter()
+            .find(|f| !is_lossy(f) && f.sample_rate().is_some());
+        if let Some(f) = lossless {
             let rate = f.sample_rate().unwrap() as f64 / 1000.0;
             return match f.bit_depth() {
                 Some(depth) => format!("{label} {depth}/{rate}"),
                 None => format!("{label} {rate}kHz"),
             };
         }
-        match files.iter().filter_map(|f| f.bitrate()).min() {
-            Some(min) => format!("{label} {min}"),
+        // The lowest bitrate is the honest summary of a lossy folder.
+        match files.iter().filter_map(|f| kbps(f)).min_by_key(|(k, _)| *k) {
+            Some(k) => format!("{label} {}", format_kbps(k)),
             None => label,
         }
     }
@@ -145,6 +151,17 @@ pub fn is_audio(f: &SearchFile) -> bool {
     AUDIO.contains(&extension(f).as_str())
 }
 
+/// Free slot first, then short queues, then fast users; a user's folders
+/// stay together.
+fn display_order(a: &Folder, b: &Folder) -> std::cmp::Ordering {
+    b.slot_free
+        .cmp(&a.slot_free)
+        .then(a.queue_length.cmp(&b.queue_length))
+        .then(b.avg_speed.cmp(&a.avg_speed))
+        .then(a.username.cmp(&b.username))
+        .then(a.path.cmp(&b.path))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Row {
     Folder(FolderId),
@@ -163,6 +180,7 @@ pub struct Results {
     selected: Option<Row>,
     filter: FormatFilter,
     pub users: usize,
+    file_count: usize,
 }
 
 impl Results {
@@ -185,20 +203,15 @@ impl Results {
                 avg_speed: resp.avg_speed,
                 queue_length: resp.queue_length,
             });
-            self.order.push(self.folders.len() - 1);
+            let id = self.folders.len() - 1;
+            // Insert in place instead of re-sorting everything per response.
+            let folders = &self.folders;
+            let pos = self
+                .order
+                .partition_point(|&other| display_order(&folders[other], &folders[id]).is_lt());
+            self.order.insert(pos, id);
+            self.file_count += folders[id].files.len();
         }
-        let folders = &self.folders;
-        // Free slot first, then short queues, then fast users; a user's
-        // folders stay together.
-        self.order.sort_by(|&a, &b| {
-            let (a, b) = (&folders[a], &folders[b]);
-            b.slot_free
-                .cmp(&a.slot_free)
-                .then(a.queue_length.cmp(&b.queue_length))
-                .then(b.avg_speed.cmp(&a.avg_speed))
-                .then(a.username.cmp(&b.username))
-                .then(a.path.cmp(&b.path))
-        });
         self.rows_dirty = true;
         if self.selected.is_none() {
             self.selected = Some(Row::Folder(self.order[0]));
@@ -210,7 +223,7 @@ impl Results {
     }
 
     pub fn file_count(&self) -> usize {
-        self.folders.iter().map(|f| f.files.len()).sum()
+        self.file_count
     }
 
     pub fn is_empty(&self) -> bool {
@@ -288,6 +301,14 @@ impl Results {
 
     pub fn move_to_start(&mut self) {
         self.selected = self.rows().first().copied();
+    }
+
+    /// `G` with a count: jump to row `index` (clamped).
+    pub fn move_to_index(&mut self, index: usize) {
+        let rows = self.rows();
+        if let Some(&row) = rows.get(index.min(rows.len().saturating_sub(1))) {
+            self.selected = Some(row);
+        }
     }
 
     pub fn move_to_end(&mut self) {
@@ -460,7 +481,7 @@ mod tests {
             ],
         ));
         assert_eq!(r.folder(0).quality(FormatFilter::All), "FLAC 16/44.1");
-        assert_eq!(r.folder(1).quality(FormatFilter::All), "MP3 256");
+        assert_eq!(r.folder(1).quality(FormatFilter::All), "MP3 256kbps");
     }
 
     #[test]
@@ -486,7 +507,7 @@ mod tests {
         let files: Vec<String> = r.selection_files().into_iter().map(|(_, f)| f).collect();
         assert_eq!(files, ["both\\1.mp3", "both\\cover.jpg"]);
         // Folders are created in path order: aac, both, v0.
-        assert_eq!(r.folder(1).quality(FormatFilter::Mp3_320), "MP3 320");
+        assert_eq!(r.folder(1).quality(FormatFilter::Mp3_320), "MP3 320kbps");
 
         r.set_filter(FormatFilter::M4a);
         assert_eq!(r.visible_folders(), 1);
@@ -496,5 +517,50 @@ mod tests {
         assert_eq!(r.visible_folders(), 2);
         assert_eq!(FormatFilter::All.prev(), FormatFilter::M4a);
         assert_eq!(FormatFilter::M4a.next(), FormatFilter::All);
+    }
+}
+
+#[cfg(test)]
+mod bench {
+    use super::*;
+
+    /// Not a real benchmark; run with `--ignored --nocapture` to see how
+    /// long a large search takes to ingest and draw rows for.
+    #[test]
+    #[ignore]
+    fn ingest_large_search() {
+        let started = std::time::Instant::now();
+        let mut r = Results::default();
+        for user in 0..700 {
+            let files = (0..80)
+                .map(|i| SearchFile {
+                    filename: format!(
+                        "Music\\Artist {}\\Album {}\\{i:02} - Track.flac",
+                        user % 50,
+                        i / 12
+                    ),
+                    size: 30_000_000,
+                    extension: "flac".into(),
+                    attributes: vec![(1, 200), (4, 44100), (5, 16)],
+                })
+                .collect();
+            r.add(SearchResponse {
+                username: format!("user{user}"),
+                token: 1,
+                files,
+                slot_free: user % 3 != 0,
+                avg_speed: (user * 7919 % 10_000_000) as u32,
+                queue_length: (user % 5) as u32,
+                private_files: vec![],
+            });
+            // The UI asks for the rows after every burst.
+            r.rows();
+            r.visible_folders();
+            r.file_count();
+        }
+        println!(
+            "ingested 700 responses / 56000 files in {:?}",
+            started.elapsed()
+        );
     }
 }

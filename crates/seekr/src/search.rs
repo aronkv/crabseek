@@ -105,17 +105,56 @@ fn print_user(resp: &SearchResponse, full_paths: bool) {
     }
 }
 
+const LOSSY: &[&str] = &["mp3", "m4a", "aac", "ogg", "opus", "wma"];
+
+/// Above this an `.m4a` is ALAC rather than AAC.
+const LOSSLESS_KBPS: u32 = 600;
+
+fn extension(f: &SearchFile) -> String {
+    f.basename()
+        .rsplit_once('.')
+        .map(|(_, e)| e.to_lowercase())
+        .unwrap_or_default()
+}
+
+/// Bitrate in kbps and whether it is estimated: the reported one, or else
+/// size × 8 / duration (many clients leave it out for M4A).
+pub(crate) fn kbps(f: &SearchFile) -> Option<(u32, bool)> {
+    if let Some(bitrate) = f.bitrate().filter(|&b| b > 0) {
+        return Some((bitrate, false));
+    }
+    let secs = u64::from(f.duration().filter(|&d| d > 0)?);
+    Some(((f.size * 8 / 1000 / secs) as u32, true))
+}
+
+/// Lossy formats are described by bitrate, lossless ones by sample rate
+/// and bit depth.
+pub(crate) fn is_lossy(f: &SearchFile) -> bool {
+    let ext = extension(f);
+    if !LOSSY.contains(&ext.as_str()) {
+        return false;
+    }
+    ext != "m4a" || kbps(f).is_none_or(|(k, _)| k < LOSSLESS_KBPS)
+}
+
+pub(crate) fn format_kbps((kbps, estimated): (u32, bool)) -> String {
+    if estimated {
+        format!("~{kbps}kbps")
+    } else {
+        format!("{kbps}kbps")
+    }
+}
+
 pub(crate) fn quality(f: &SearchFile) -> String {
     let mut parts = Vec::new();
-    match (f.sample_rate(), f.bit_depth()) {
-        (Some(rate), Some(depth)) => {
-            parts.push(format!("{:.1}kHz/{depth}bit", rate as f64 / 1000.0))
-        }
-        (Some(rate), None) => parts.push(format!("{:.1}kHz", rate as f64 / 1000.0)),
-        _ => {}
-    }
-    if let Some(bitrate) = f.bitrate() {
-        parts.push(format!("{bitrate}kbps"));
+    let sample = match (f.sample_rate(), f.bit_depth()) {
+        (Some(rate), Some(depth)) => Some(format!("{:.1}kHz/{depth}bit", rate as f64 / 1000.0)),
+        (Some(rate), None) => Some(format!("{:.1}kHz", rate as f64 / 1000.0)),
+        _ => None,
+    };
+    match (is_lossy(f), sample) {
+        (false, Some(sample)) => parts.push(sample),
+        _ => parts.extend(kbps(f).map(format_kbps)),
     }
     if let Some(secs) = f.duration() {
         parts.push(format!("{}:{:02}", secs / 60, secs % 60));
@@ -161,5 +200,19 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(quality(&mp3), "320kbps  3:20");
+        // AAC without a reported bitrate: estimated from size and length.
+        let aac = SearchFile {
+            filename: "a\\x.m4a".into(),
+            size: 6_400_000,
+            attributes: vec![(1, 200), (4, 44100), (5, 16)],
+            ..Default::default()
+        };
+        assert_eq!(quality(&aac), "~256kbps  3:20");
+        // ALAC in an .m4a stays lossless.
+        let alac = SearchFile {
+            size: 40_000_000,
+            ..aac.clone()
+        };
+        assert_eq!(quality(&alac), "44.1kHz/16bit  3:20");
     }
 }

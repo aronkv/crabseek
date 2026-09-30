@@ -11,6 +11,14 @@ authors = ["DarkAaronfox"]
 repository = "https://github.com/DarkAaronfox/seekr"
 homepage = "https://github.com/DarkAaronfox/seekr"
 
+# `cargo run` stays debuggable but no longer crawls through zlib and
+# protocol decoding: our code gets basic optimizations, dependencies full.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

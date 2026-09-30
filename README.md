@@ -65,8 +65,9 @@ scripts/install.sh          # builds and installs to ~/.local/bin/seekr
 
 Then run `seekr`. If your shell cannot find it, add `~/.local/bin` to your `PATH`; the
 script prints how. To install somewhere else, use `PREFIX=/usr/local sudo -E scripts/install.sh`.
-To remove seekr, run `scripts/uninstall.sh`. It keeps your login and settings unless
-you add `--purge`, and it never touches downloaded music.
+To remove seekr, run `scripts/uninstall.sh`. It deletes the binary, your login and
+settings, the download list, the cache and the logs after one confirmation (`-y`
+skips it). Downloaded music is never touched.
 
 Alternatively: `cargo install --git https://github.com/DarkAaronfox/seekr seekr`.
 
@@ -104,7 +105,9 @@ Without this, you can still download from peers that are reachable themselves.
 | Where | Key | Action |
 |---|---|---|
 | everywhere | `/` | focus the search box |
-| | `Tab`, `1`–`4` | switch between Search, Downloads, Uploads and Settings |
+| | `Tab`, `Alt-1`–`4`, `F1`–`F4` | switch between Search, Downloads, Uploads and Settings |
+| lists | `10j`, `10k`, `10↑` … | vim-style counts: move 10 rows (the count shows bottom left) |
+| | `5G` | jump to row 5 |
 | | `q` | quit (asks again while downloads are running) |
 | search box | `Enter` | search |
 | | `Esc` | back to the results |

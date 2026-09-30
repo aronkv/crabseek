@@ -77,6 +77,8 @@ pub struct App {
     /// Where the download list is saved; `None` in tests.
     downloads_path: Option<PathBuf>,
     confirm_quit: bool,
+    /// Vim-style count typed before a motion (`10k`).
+    pub count: Option<usize>,
 }
 
 impl App {
@@ -107,6 +109,7 @@ impl App {
             page_size: 10,
             quit: false,
             confirm_quit: false,
+            count: None,
             downloads_path,
         };
         app.restore(saved);
@@ -241,23 +244,48 @@ impl App {
             return;
         }
 
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        // Digits build a count for the next motion, like in vim.
+        if let KeyCode::Char(c @ '0'..='9') = key.code
+            && !alt
+            && (c != '0' || self.count.is_some())
+        {
+            let digit = c as usize - '0' as usize;
+            self.count = Some((self.count.unwrap_or(0) * 10 + digit).min(99_999));
+            return;
+        }
+        let count = self.count.take();
+
         match key.code {
             KeyCode::Char('q') => self.request_quit(),
             KeyCode::Tab => self.tab = self.tab.cycle(1),
             KeyCode::BackTab => self.tab = self.tab.cycle(-1),
-            KeyCode::Char('1') => self.tab = Tab::Search,
-            KeyCode::Char('2') => self.tab = Tab::Transfers,
-            KeyCode::Char('3') => self.tab = Tab::Uploads,
-            KeyCode::Char('4') => self.tab = Tab::Settings,
+            KeyCode::Char('1') | KeyCode::F(1) => self.tab = Tab::Search,
+            KeyCode::Char('2') | KeyCode::F(2) => self.tab = Tab::Transfers,
+            KeyCode::Char('3') | KeyCode::F(3) => self.tab = Tab::Uploads,
+            KeyCode::Char('4') | KeyCode::F(4) => self.tab = Tab::Settings,
             KeyCode::Char('/') => {
                 self.tab = Tab::Search;
                 self.focus = Focus::Input;
             }
             _ => match self.tab {
-                Tab::Search => self.on_results_key(key),
-                Tab::Transfers => self.on_transfers_key(key),
-                Tab::Uploads => self.on_uploads_key(key),
-                Tab::Settings => self.on_settings_key(key),
+                Tab::Search => self.on_results_key(key, count),
+                Tab::Transfers => self.on_transfers_key(key, count),
+                Tab::Uploads => self.on_uploads_key(key, count),
+                Tab::Settings => {
+                    // Settings moves one row per key; repeat for a count.
+                    let times = if matches!(
+                        key.code,
+                        KeyCode::Char('j' | 'k') | KeyCode::Up | KeyCode::Down
+                    ) {
+                        count.unwrap_or(1)
+                    } else {
+                        1
+                    };
+                    for _ in 0..times {
+                        self.on_settings_key(key);
+                    }
+                }
             },
         }
     }
@@ -287,15 +315,20 @@ impl App {
         };
     }
 
-    fn on_uploads_key(&mut self, key: KeyEvent) {
-        let page = self.page_size.max(1) as isize;
+    fn on_uploads_key(&mut self, key: KeyEvent, count: Option<usize>) {
+        let n = count.unwrap_or(1) as isize;
+        let page = self.page_size.max(1) as isize * n;
+        let u = &mut self.uploads;
         match key.code {
-            KeyCode::Down | KeyCode::Char('j') => self.uploads.move_by(1),
-            KeyCode::Up | KeyCode::Char('k') => self.uploads.move_by(-1),
-            KeyCode::PageDown => self.uploads.move_by(page),
-            KeyCode::PageUp => self.uploads.move_by(-page),
-            KeyCode::Home | KeyCode::Char('g') => self.uploads.selected = 0,
-            KeyCode::End | KeyCode::Char('G') => self.uploads.move_by(isize::MAX),
+            KeyCode::Down | KeyCode::Char('j') => u.move_by(n),
+            KeyCode::Up | KeyCode::Char('k') => u.move_by(-n),
+            KeyCode::PageDown => u.move_by(page),
+            KeyCode::PageUp => u.move_by(-page),
+            KeyCode::Home | KeyCode::Char('g') => u.selected = 0,
+            KeyCode::End | KeyCode::Char('G') => match count {
+                Some(line) => u.selected = (line - 1).min(u.list.len().saturating_sub(1)),
+                None => u.move_by(isize::MAX),
+            },
             KeyCode::Char('c') => {
                 if let Some(u) = self.uploads.selected()
                     && !u.is_finished()
@@ -362,19 +395,23 @@ impl App {
         }
     }
 
-    fn on_results_key(&mut self, key: KeyEvent) {
+    fn on_results_key(&mut self, key: KeyEvent, count: Option<usize>) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let page = self.page_size.max(1) as isize;
+        let n = count.unwrap_or(1) as isize;
+        let page = self.page_size.max(1) as isize * n;
         let r = &mut self.results;
         match key.code {
-            KeyCode::Down | KeyCode::Char('j') => r.move_by(1),
-            KeyCode::Up | KeyCode::Char('k') => r.move_by(-1),
+            KeyCode::Down | KeyCode::Char('j') => r.move_by(n),
+            KeyCode::Up | KeyCode::Char('k') => r.move_by(-n),
             KeyCode::PageDown => r.move_by(page),
             KeyCode::PageUp => r.move_by(-page),
             KeyCode::Char('d') if ctrl => r.move_by(page / 2),
             KeyCode::Char('u') if ctrl => r.move_by(-page / 2),
             KeyCode::Home | KeyCode::Char('g') => r.move_to_start(),
-            KeyCode::End | KeyCode::Char('G') => r.move_to_end(),
+            KeyCode::End | KeyCode::Char('G') => match count {
+                Some(line) => r.move_to_index(line - 1),
+                None => r.move_to_end(),
+            },
             KeyCode::Enter | KeyCode::Char(' ') => r.toggle(),
             KeyCode::Right | KeyCode::Char('l') => r.expand(),
             KeyCode::Left | KeyCode::Char('h') => r.collapse(),
@@ -416,15 +453,20 @@ impl App {
         };
     }
 
-    fn on_transfers_key(&mut self, key: KeyEvent) {
-        let page = self.page_size.max(1) as isize;
+    fn on_transfers_key(&mut self, key: KeyEvent, count: Option<usize>) {
+        let n = count.unwrap_or(1) as isize;
+        let page = self.page_size.max(1) as isize * n;
+        let t = &mut self.transfers;
         match key.code {
-            KeyCode::Down | KeyCode::Char('j') => self.transfers.move_by(1),
-            KeyCode::Up | KeyCode::Char('k') => self.transfers.move_by(-1),
-            KeyCode::PageDown => self.transfers.move_by(page),
-            KeyCode::PageUp => self.transfers.move_by(-page),
-            KeyCode::Home | KeyCode::Char('g') => self.transfers.selected = 0,
-            KeyCode::End | KeyCode::Char('G') => self.transfers.move_by(isize::MAX),
+            KeyCode::Down | KeyCode::Char('j') => t.move_by(n),
+            KeyCode::Up | KeyCode::Char('k') => t.move_by(-n),
+            KeyCode::PageDown => t.move_by(page),
+            KeyCode::PageUp => t.move_by(-page),
+            KeyCode::Home | KeyCode::Char('g') => t.selected = 0,
+            KeyCode::End | KeyCode::Char('G') => match count {
+                Some(line) => t.selected = (line - 1).min(t.list.len().saturating_sub(1)),
+                None => t.move_by(isize::MAX),
+            },
             KeyCode::Char('c') => {
                 if let Some(t) = self.transfers.selected()
                     && !t.is_finished()

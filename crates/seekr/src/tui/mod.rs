@@ -369,6 +369,31 @@ mod tests {
     }
 
     #[test]
+    fn vim_counts_and_alt_tabs() {
+        use crossterm::event::KeyModifiers;
+        let mut app = app_with_results();
+        app.on_key(KeyEvent::from(KeyCode::Enter)); // expand: 4 rows
+        app.on_key(KeyEvent::from(KeyCode::Char('3')));
+        assert_eq!(app.count, Some(3));
+        assert!(draw(&mut app).contains(" 3 "));
+        app.on_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.count, None);
+        assert_eq!(app.results.selected_index(), Some(3));
+        app.on_key(KeyEvent::from(KeyCode::Char('2')));
+        app.on_key(KeyEvent::from(KeyCode::Up));
+        assert_eq!(app.results.selected_index(), Some(1));
+        app.on_key(KeyEvent::from(KeyCode::Char('1')));
+        app.on_key(KeyEvent::from(KeyCode::Char('G')));
+        assert_eq!(app.results.selected_index(), Some(0));
+        assert_eq!(app.tab, Tab::Search);
+
+        app.on_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::ALT));
+        assert_eq!(app.tab, Tab::Uploads);
+        app.on_key(KeyEvent::from(KeyCode::F(4)));
+        assert_eq!(app.tab, Tab::Settings);
+    }
+
+    #[test]
     fn download_key_on_offline_client_reports_error() {
         let mut app = app_with_results();
         app.on_key(KeyEvent::from(KeyCode::Char('d')));

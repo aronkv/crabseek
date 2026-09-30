@@ -36,7 +36,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Paragraph::new(app.status.as_str()).fg(Color::Yellow),
         status,
     );
-    frame.render_widget(Paragraph::new(help_line(app)).dark_gray(), help);
+    let mut help_spans = Vec::new();
+    if let Some(count) = app.count {
+        help_spans.push(Span::raw(format!(" {count} ")).black().on_yellow());
+    }
+    help_spans.push(Span::raw(help_line(app)).dark_gray());
+    frame.render_widget(Paragraph::new(Line::from(help_spans)), help);
 }
 
 fn render_header(frame: &mut Frame, app: &App, area: Rect) {
@@ -422,19 +427,19 @@ fn help_line(app: &App) -> &'static str {
     match (app.tab, app.focus) {
         (Tab::Search, Focus::Input) => " Enter search · Esc results · Ctrl-u clear · Ctrl-c quit",
         (Tab::Search, Focus::List) => {
-            " j/k move · Enter open folder · h/l collapse/expand · d download · f/F format filter · / search · Tab transfers · q quit"
+            " 10j/10k jump · j/k move · Enter open folder · h/l collapse/expand · d download · f/F format filter · / search · Tab/Alt-1…4 tabs · q quit"
         }
         (Tab::Transfers, _) => {
-            " j/k move · c cancel · r retry failed · x clear finished · / search · Tab uploads · q quit"
+            " j/k move · c cancel · r retry failed · x clear finished · / search · Tab/Alt-1…4 tabs · q quit"
         }
         (Tab::Uploads, _) => {
-            " j/k move · c cancel · x clear finished · / search · Tab settings · q quit"
+            " j/k move · c cancel · x clear finished · / search · Tab/Alt-1…4 tabs · q quit"
         }
         (Tab::Settings, _) if app.settings.is_editing() => {
             " Tab complete folder · Enter save · Esc cancel · Ctrl-u clear"
         }
         (Tab::Settings, _) => {
-            " j/k move · Enter edit · a add shared folder · x remove · / search · Tab search · q quit"
+            " j/k move · Enter edit · a add shared folder · x remove · / search · Tab/Alt-1…4 tabs · q quit"
         }
     }
 }

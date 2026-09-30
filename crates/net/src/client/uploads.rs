@@ -430,7 +430,7 @@ async fn send_file(
     let started = Instant::now();
     let mut sent = offset;
     let mut last_report = Instant::now();
-    let mut buf = vec![0; 64 * 1024];
+    let mut buf = vec![0; 256 * 1024];
     progress(sent);
     while sent < size {
         let n = file.read(&mut buf).await?;
