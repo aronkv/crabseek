@@ -1,0 +1,313 @@
+//! End-to-end transfer test: a fake Soulseek server on localhost and two
+//! real clients. Client A shares a folder, client B downloads from it, so
+//! the whole upload path runs over real sockets: QueueUpload,
+//! TransferRequest/Response, the F connection opened by the uploader
+//! (direct or through the server's ConnectToPeer relay), FileOffset and
+//! the data itself.
+
+use std::collections::HashMap;
+use std::net::Ipv4Addr;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use bytes::{BufMut, BytesMut};
+use seekr_net::{Client, ClientConfig, DownloadState, Event, UploadState};
+use seekr_proto::wire::{Reader, WireWrite};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
+
+/// What the fake server knows about a logged-in user.
+struct Session {
+    port: u32,
+    tx: mpsc::UnboundedSender<Vec<u8>>,
+}
+
+type Sessions = Arc<Mutex<HashMap<String, Session>>>;
+
+/// Users whose listen port the server hides, as if they were behind a
+/// firewall: others then only reach them through ConnectToPeer.
+type Firewalled = Arc<Vec<String>>;
+
+fn frame(code: u32, body: impl FnOnce(&mut BytesMut)) -> Vec<u8> {
+    let mut b = BytesMut::new();
+    b.put_u32_le(0);
+    b.put_u32_le(code);
+    body(&mut b);
+    let len = (b.len() - 4) as u32;
+    b[..4].copy_from_slice(&len.to_le_bytes());
+    b.to_vec()
+}
+
+/// Implements just enough of the server: login, SetWaitPort,
+/// GetPeerAddress and relaying ConnectToPeer. Everything is on 127.0.0.1.
+async fn fake_server(firewalled: &[&str]) -> String {
+    let firewalled: Firewalled = Arc::new(firewalled.iter().map(|s| s.to_string()).collect());
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap().to_string();
+    let sessions: Sessions = Arc::default();
+    tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            tokio::spawn(serve(stream, sessions.clone(), firewalled.clone()));
+        }
+    });
+    addr
+}
+
+async fn serve(stream: TcpStream, sessions: Sessions, firewalled: Firewalled) {
+    let (mut read, mut write) = stream.into_split();
+    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    tokio::spawn(async move {
+        while let Some(bytes) = rx.recv().await {
+            if write.write_all(&bytes).await.is_err() {
+                return;
+            }
+        }
+    });
+
+    let mut me = String::new();
+    loop {
+        let Ok(len) = read.read_u32_le().await else {
+            sessions.lock().unwrap().remove(&me);
+            return;
+        };
+        let mut payload = vec![0; len as usize];
+        read.read_exact(&mut payload).await.unwrap();
+        let mut r = Reader::new(&payload);
+        match r.u32().unwrap() {
+            // Login
+            1 => {
+                me = r.string().unwrap();
+                sessions.lock().unwrap().insert(
+                    me.clone(),
+                    Session {
+                        port: 0,
+                        tx: tx.clone(),
+                    },
+                );
+                tx.send(frame(1, |b| {
+                    b.put_bool_wire(true);
+                    b.put_string_wire("welcome to the fake server");
+                    b.put_ipv4_wire(Ipv4Addr::LOCALHOST);
+                    b.put_string_wire("hash");
+                    b.put_bool_wire(false);
+                }))
+                .unwrap();
+            }
+            // SetWaitPort
+            2 => {
+                let port = r.u32().unwrap();
+                sessions.lock().unwrap().get_mut(&me).unwrap().port = port;
+            }
+            // GetPeerAddress
+            3 => {
+                let user = r.string().unwrap();
+                let port = if firewalled.contains(&user) {
+                    1 // nothing listens there
+                } else {
+                    sessions.lock().unwrap().get(&user).map_or(0, |s| s.port)
+                };
+                tx.send(frame(3, |b| {
+                    b.put_string_wire(&user);
+                    b.put_ipv4_wire(if port == 0 {
+                        Ipv4Addr::UNSPECIFIED
+                    } else {
+                        Ipv4Addr::LOCALHOST
+                    });
+                    b.put_u32_le(port);
+                    b.put_u32_le(0);
+                    b.put_u16_le(0);
+                }))
+                .unwrap();
+            }
+            // ConnectToPeer: relay to the target with our address.
+            18 => {
+                let token = r.u32().unwrap();
+                let target = r.string().unwrap();
+                let conn_type = r.string().unwrap();
+                let sessions = sessions.lock().unwrap();
+                let my_port = sessions[&me].port;
+                if let Some(target) = sessions.get(&target) {
+                    target
+                        .tx
+                        .send(frame(18, |b| {
+                            b.put_string_wire(&me);
+                            b.put_string_wire(&conn_type);
+                            b.put_ipv4_wire(Ipv4Addr::LOCALHOST);
+                            b.put_u32_le(my_port);
+                            b.put_u32_le(token);
+                            b.put_bool_wire(false);
+                            b.put_u32_le(0);
+                            b.put_u32_le(0);
+                        }))
+                        .unwrap();
+                }
+            }
+            // SetStatus, ServerPing, SharedFoldersFiles, SendUploadSpeed,
+            // CantConnectToPeer, FileSearch: nothing to answer.
+            _ => {}
+        }
+    }
+}
+
+async fn free_port() -> u16 {
+    let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    l.local_addr().unwrap().port()
+}
+
+fn temp_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("seekr-e2e-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+async fn start(
+    server: &str,
+    username: &str,
+    download_dir: &Path,
+    shared_dirs: Vec<PathBuf>,
+) -> (Client, mpsc::UnboundedReceiver<Event>) {
+    let (client, info, events) = Client::start(ClientConfig {
+        server: server.to_owned(),
+        username: username.to_owned(),
+        password: "pw".to_owned(),
+        listen_port: free_port().await,
+        download_dir: download_dir.to_owned(),
+        shared_dirs,
+        share_cache: None,
+        upload_slots: 2,
+    })
+    .await
+    .unwrap();
+    assert_eq!(info.own_ip, Ipv4Addr::LOCALHOST);
+    (client, events)
+}
+
+/// Waits for the first event `pick` accepts, failing after 20 seconds.
+async fn wait_for<T>(
+    events: &mut mpsc::UnboundedReceiver<Event>,
+    mut pick: impl FnMut(Event) -> Option<T>,
+) -> T {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let event = events.recv().await.expect("client stopped");
+            if let Some(t) = pick(event) {
+                return t;
+            }
+        }
+    })
+    .await
+    .expect("timed out waiting for event")
+}
+
+fn song(len: usize) -> Vec<u8> {
+    (0..len as u32).map(|i| (i * 31 + 7) as u8).collect()
+}
+
+#[tokio::test]
+async fn upload_and_resume_between_two_clients() {
+    upload_and_resume("direct", &[]).await;
+}
+
+/// Bob hides his port, so Alice's file connection has to go through the
+/// server: she sends ConnectToPeer, Bob connects back with PierceFireWall.
+#[tokio::test]
+async fn upload_to_firewalled_downloader() {
+    upload_and_resume("indirect", &["bob"]).await;
+}
+
+async fn upload_and_resume(name: &str, firewalled: &[&str]) {
+    let root = temp_dir(name);
+    let share = root.join("Music");
+    let album = share.join("Artist").join("Album");
+    std::fs::create_dir_all(&album).unwrap();
+    let data = song(3_000_000);
+    std::fs::write(album.join("01 - Song.flac"), &data).unwrap();
+    let remote = "Music\\Artist\\Album\\01 - Song.flac";
+
+    let server = fake_server(firewalled).await;
+    let (_alice, mut alice_events) = start(
+        &server,
+        "alice",
+        &root.join("alice-dl"),
+        vec![share.clone()],
+    )
+    .await;
+    let (bob, mut bob_events) = start(&server, "bob", &root.join("bob-dl"), vec![]).await;
+
+    let files = wait_for(&mut alice_events, |e| match e {
+        Event::SharesScanned { files, .. } => Some(files),
+        _ => None,
+    })
+    .await;
+    assert_eq!(files, 1);
+
+    // Pretend an earlier attempt got a third of the file.
+    let target = root.join("bob-dl").join("Album").join("01 - Song.flac");
+    std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+    std::fs::write(
+        target.with_file_name("01 - Song.flac.part"),
+        &data[..1_000_000],
+    )
+    .unwrap();
+
+    let id = bob.download("alice", remote).unwrap();
+    let path = wait_for(&mut bob_events, |e| match e {
+        Event::Download {
+            id: got,
+            state: DownloadState::Completed { path },
+            ..
+        } if got == id => Some(path),
+        Event::Download {
+            state: DownloadState::Failed { reason },
+            ..
+        } => panic!("download failed: {reason}"),
+        _ => None,
+    })
+    .await;
+    assert_eq!(path, target);
+    assert_eq!(std::fs::read(&path).unwrap(), data);
+
+    // Alice saw the upload through to the end.
+    wait_for(&mut alice_events, |e| match e {
+        Event::Upload {
+            state: UploadState::Completed,
+            username,
+            ..
+        } => {
+            assert_eq!(username, "bob");
+            Some(())
+        }
+        Event::Upload {
+            state: UploadState::Failed { reason },
+            ..
+        } => panic!("upload failed: {reason}"),
+        _ => None,
+    })
+    .await;
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn unshared_file_is_denied() {
+    let root = temp_dir("denied");
+    let server = fake_server(&[]).await;
+    let (_alice, _alice_events) = start(&server, "alice", &root.join("a"), vec![]).await;
+    let (bob, mut bob_events) = start(&server, "bob", &root.join("b"), vec![]).await;
+
+    let id = bob.download("alice", "Music\\secret.flac").unwrap();
+    let reason = wait_for(&mut bob_events, |e| match e {
+        Event::Download {
+            id: got,
+            state: DownloadState::Failed { reason },
+            ..
+        } if got == id => Some(reason),
+        _ => None,
+    })
+    .await;
+    assert_eq!(reason, "File not shared.");
+    std::fs::remove_dir_all(root).unwrap();
+}
