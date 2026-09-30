@@ -69,6 +69,9 @@ enum Command {
         #[arg(long, default_value_t = 60)]
         timeout_secs: u64,
     },
+    /// Check automatic port forwarding (UPnP): open the listen port on the
+    /// router, report, and close it again.
+    Portmap,
     /// Forget the saved username and password.
     Logout,
     /// Print the config file location.
@@ -110,6 +113,28 @@ async fn main() -> anyhow::Result<()> {
             username,
             timeout_secs,
         } => browse(username, timeout_secs).await,
+        Command::Portmap => {
+            let port = config::load_or_default()?.listen_port;
+            println!("asking the router to open TCP port {port}...");
+            match seekr_net::portmap::map(port).await {
+                Ok(m) => {
+                    if m.already_mapped {
+                        println!("the router already has a rule for port {port} (manual forward?)");
+                    } else {
+                        println!("port {port} opened on the router");
+                    }
+                    if let Some(ip) = m.external_ip {
+                        println!("router's public address: {ip}");
+                    }
+                    if !m.already_mapped {
+                        seekr_net::portmap::unmap(port).await;
+                        println!("removed the test mapping again");
+                    }
+                }
+                Err(e) => println!("UPnP not available: {e}"),
+            }
+            Ok(())
+        }
         Command::Logout => {
             if config::clear_credentials()? {
                 println!("logged out; run `seekr` to log in again");
@@ -342,6 +367,7 @@ fn print_event(event: &Event) -> bool {
             }
         }
         Event::Distrib(status) => println!("distributed network: {status:?}"),
+        Event::PortMap(status) => println!("port forwarding: {status:?}"),
         Event::BrowseResult { username, list } => {
             println!("[{username}] shares {} folders", list.dirs.len())
         }

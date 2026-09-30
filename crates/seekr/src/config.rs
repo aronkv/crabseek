@@ -31,6 +31,9 @@ pub struct Config {
     /// Uploads that may run at the same time.
     #[serde(default = "default_upload_slots")]
     pub upload_slots: usize,
+    /// Open the listen port on the router automatically (UPnP).
+    #[serde(default = "default_upnp")]
+    pub upnp: bool,
 }
 
 impl Default for Config {
@@ -49,6 +52,10 @@ fn default_port() -> u16 {
 
 fn default_upload_slots() -> usize {
     2
+}
+
+fn default_upnp() -> bool {
+    true
 }
 
 impl Config {
@@ -94,6 +101,7 @@ impl Config {
             shared_dirs: self.shared_dirs()?,
             share_cache: Some(project_dirs()?.cache_dir().join("shares.json")),
             upload_slots: self.upload_slots,
+            upnp: self.upnp,
         })
     }
 }
@@ -172,6 +180,12 @@ pub fn save_download_dir(dir: &Path) -> anyhow::Result<()> {
 pub fn save_listen_port(port: u16) -> anyhow::Result<()> {
     update(|table| {
         table.insert("listen_port".into(), i64::from(port).into());
+    })
+}
+
+pub fn save_upnp(enabled: bool) -> anyhow::Result<()> {
+    update(|table| {
+        table.insert("upnp".into(), enabled.into());
     })
 }
 

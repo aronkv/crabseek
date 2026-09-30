@@ -4,6 +4,7 @@ pub mod client;
 pub mod connect;
 mod distrib_conn;
 mod peer;
+pub mod portmap;
 pub mod server;
 pub mod shares;
 pub mod transfer;
@@ -12,4 +13,5 @@ pub use client::{
     Client, ClientConfig, ConnectMethod, DistribStatus, DownloadId, DownloadState, Event,
     StartError, UploadId, UploadState,
 };
+pub use portmap::{PortMapStatus, PortMapping};
 pub use server::{LoginError, LoginInfo, ServerConnection};

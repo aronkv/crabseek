@@ -11,6 +11,7 @@ repository.workspace = true
 [dependencies]
 bytes = "1.12.1"
 futures = "0.3.34"
+igd-next = { version = "0.17.1", features = ["aio_tokio"] }
 lofty = "0.24.0"
 seekr-proto = { version = "0.1.0", path = "../proto" }
 serde = { version = "1.0.229", features = ["derive"] }

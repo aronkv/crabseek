@@ -51,6 +51,8 @@ you type `seekr`, search, and download whole albums in a few keystrokes.
   length, marked `~`, when the peer does not send it), plus sample rate and bit depth
   for lossless files, duration and size.
 - **Vim-style navigation:** `j`/`k`, counts like `10k` or `5G`, `g`/`G`.
+- **Automatic port forwarding:** UPnP opens the listen port on the router, with a
+  warning when another NAT sits in front of it.
 - **Solid networking:** direct and firewall-piercing (indirect) peer connections are
   raced against each other, so peers behind NAT still work. Peers behind your own
   router are reached locally.
@@ -117,10 +119,15 @@ Your credentials are saved only after the server accepts them. See
 
 ### Let peers reach you
 
-Soulseek is peer-to-peer. Downloads work best when other users can connect to you on
-your listen port (TCP **2234** by default):
+Soulseek is peer-to-peer. Downloads and sharing work best when other users can connect
+to you on your listen port (TCP **2234** by default):
 
-- **Router:** forward TCP 2234 to your computer.
+- **Router:** seekr opens the port by itself with **UPnP** when the router supports
+  it, and renews it every 30 minutes. The Settings tab shows the result; check it any
+  time with `seekr portmap`. Without UPnP, forward TCP 2234 to your computer by hand.
+- **Double NAT:** if Settings says the router "sits behind another NAT", your ISP's
+  modem is in front of it. That device needs a forward to your router, or has to run
+  in bridge mode.
 - **Local firewall:** allow the port, e.g. `sudo ufw allow 2234/tcp`.
 
 Without this, you can still download from peers that are reachable themselves.
@@ -150,7 +157,7 @@ Without this, you can still download from peers that are reachable themselves.
 | | `x` | clear finished downloads |
 | uploads | `c` | cancel |
 | | `x` | clear finished uploads |
-| settings | `Enter` | edit the selected folder or port (`Tab` completes paths) |
+| settings | `Enter` | edit the selected folder or port (`Tab` completes paths), toggle UPnP |
 | | `a` / `x` | add or remove a shared folder |
 
 ### Command line
@@ -161,6 +168,7 @@ seekr search "artist album" --full-paths
 seekr download <user> '<remote\path\to\file.flac>'
 seekr userinfo <user>                   # test a peer connection
 seekr browse <user>                     # list a user's shared folders
+seekr portmap                           # test automatic port forwarding (UPnP)
 seekr shares ["query"] [--dir PATH]     # what you share, and what a search would find
 seekr logout                            # forget saved credentials
 seekr config-path                       # where the config lives
@@ -179,6 +187,7 @@ download_dir = "~/Downloads/seekr"      # default
 shared_dirs = ["~/Music"]               # default
 upload_slots = 2                        # default
 listen_port = 2234                      # default
+upnp = true                             # default: open the port on the router
 server = "server.slsknet.org:2242"      # default
 ```
 
@@ -211,7 +220,7 @@ server = "server.slsknet.org:2242"      # default
 - [x] Distributed search network (as a child node; relaying searches to children is next)
 - [x] Browsing a user's shares
 - [ ] Private messages, wishlist
-- [ ] Automatic port mapping (UPnP / NAT-PMP)
+- [x] Automatic port mapping (UPnP)
 - [ ] AUR package
 
 ## Development

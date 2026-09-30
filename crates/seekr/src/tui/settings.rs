@@ -12,6 +12,7 @@ use crate::config::{display_path, expand_home};
 pub enum Item {
     DownloadDir,
     ListenPort,
+    Upnp,
     Shared(usize),
     AddShared,
 }
@@ -28,12 +29,14 @@ pub enum SettingsAction {
     SetDownloadDir(PathBuf),
     /// Saved once the new port is actually bound.
     SetListenPort(u16),
+    SetUpnp(bool),
     SetSharedDirs(Vec<PathBuf>),
 }
 
 pub struct Settings {
     pub download_dir: PathBuf,
     pub listen_port: u16,
+    pub upnp: bool,
     pub shared: Vec<PathBuf>,
     pub selected: usize,
     pub edit: Option<Edit>,
@@ -41,10 +44,11 @@ pub struct Settings {
 }
 
 impl Settings {
-    pub fn new(download_dir: PathBuf, listen_port: u16, shared: Vec<PathBuf>) -> Self {
+    pub fn new(download_dir: PathBuf, listen_port: u16, upnp: bool, shared: Vec<PathBuf>) -> Self {
         Self {
             download_dir,
             listen_port,
+            upnp,
             shared,
             selected: 0,
             edit: None,
@@ -53,7 +57,7 @@ impl Settings {
     }
 
     pub fn items(&self) -> Vec<Item> {
-        let mut items = vec![Item::DownloadDir, Item::ListenPort];
+        let mut items = vec![Item::DownloadDir, Item::ListenPort, Item::Upnp];
         items.extend((0..self.shared.len()).map(Item::Shared));
         items.push(Item::AddShared);
         items
@@ -61,7 +65,7 @@ impl Settings {
 
     /// Row index of the shared folder `i`.
     fn shared_index(i: usize) -> usize {
-        i + 2
+        i + 3
     }
 
     fn selected_item(&self) -> Item {
@@ -83,6 +87,11 @@ impl Settings {
                 self.selected = (self.selected + 1).min(count - 1)
             }
             KeyCode::Up | KeyCode::Char('k') => self.selected = self.selected.saturating_sub(1),
+            // The UPnP switch toggles instead of opening an editor.
+            KeyCode::Enter | KeyCode::Char('e' | ' ') if self.selected_item() == Item::Upnp => {
+                self.upnp = !self.upnp;
+                return SettingsAction::SetUpnp(self.upnp);
+            }
             KeyCode::Enter | KeyCode::Char('e') => self.start_edit(self.selected_item()),
             KeyCode::Char('a') => {
                 self.selected = count - 1;
@@ -104,6 +113,7 @@ impl Settings {
         let text = match item {
             Item::DownloadDir => display_path(&self.download_dir),
             Item::ListenPort => self.listen_port.to_string(),
+            Item::Upnp => return,
             Item::Shared(i) => display_path(&self.shared[i]),
             Item::AddShared => "~/".to_owned(),
         };
@@ -168,7 +178,7 @@ impl Settings {
                 self.download_dir = path.clone();
                 SettingsAction::SetDownloadDir(path)
             }
-            Item::ListenPort => unreachable!("handled above"),
+            Item::ListenPort | Item::Upnp => unreachable!("handled above"),
             item @ (Item::Shared(_) | Item::AddShared) => {
                 if !path.is_dir() {
                     self.error = Some(format!(
@@ -292,7 +302,7 @@ mod tests {
     #[test]
     fn add_edit_remove_shared() {
         let dir = temp_tree("edit");
-        let mut s = Settings::new(dir.join("dl"), 2234, vec![]);
+        let mut s = Settings::new(dir.join("dl"), 2234, true, vec![]);
 
         s.on_key(key(KeyCode::Char('a')));
         s.edit.as_mut().unwrap().text.clear();
@@ -316,7 +326,7 @@ mod tests {
         assert_eq!(s.on_key(key(KeyCode::Enter)), SettingsAction::None);
         s.on_key(key(KeyCode::Esc));
 
-        s.selected = 2;
+        s.selected = 3;
         assert_eq!(
             s.on_key(key(KeyCode::Char('x'))),
             SettingsAction::SetSharedDirs(vec![])
@@ -325,8 +335,23 @@ mod tests {
     }
 
     #[test]
+    fn upnp_toggles() {
+        let mut s = Settings::new(PathBuf::from("/dl"), 2234, true, vec![]);
+        s.selected = 2;
+        assert_eq!(
+            s.on_key(key(KeyCode::Enter)),
+            SettingsAction::SetUpnp(false)
+        );
+        assert!(!s.is_editing());
+        assert_eq!(
+            s.on_key(key(KeyCode::Char(' '))),
+            SettingsAction::SetUpnp(true)
+        );
+    }
+
+    #[test]
     fn listen_port() {
-        let mut s = Settings::new(PathBuf::from("/dl"), 2234, vec![]);
+        let mut s = Settings::new(PathBuf::from("/dl"), 2234, true, vec![]);
         s.selected = 1;
         s.on_key(key(KeyCode::Enter));
         assert_eq!(s.edit.as_ref().unwrap().text, "2234");
@@ -349,7 +374,7 @@ mod tests {
     #[test]
     fn download_dir_may_not_exist_yet() {
         let dir = temp_tree("dl");
-        let mut s = Settings::new(dir.join("dl"), 2234, vec![]);
+        let mut s = Settings::new(dir.join("dl"), 2234, true, vec![]);
         s.on_key(key(KeyCode::Enter));
         s.edit.as_mut().unwrap().text = format!("{}/new/place", dir.display());
         assert_eq!(

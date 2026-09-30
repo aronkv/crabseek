@@ -27,6 +27,7 @@ use tokio::sync::mpsc;
 
 use crate::connect;
 use crate::peer::{self, ConnId, PeerHandle};
+use crate::portmap::{self, PortMapStatus};
 use crate::server::{self, LoginError, LoginInfo, ServerConnection, ServerReader, ServerWriter};
 use crate::shares::ShareIndex;
 
@@ -56,6 +57,8 @@ pub struct ClientConfig {
     pub share_cache: Option<PathBuf>,
     /// Uploads that may run at the same time.
     pub upload_slots: usize,
+    /// Open the listen port on the router with UPnP.
+    pub upnp: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -137,6 +140,8 @@ pub enum Event {
         query: String,
         results: usize,
     },
+    /// Automatic port forwarding (UPnP) changed state.
+    PortMap(PortMapStatus),
     /// Outcome of [`Client::set_listen_port`].
     ListenPort {
         port: u16,
@@ -184,6 +189,7 @@ impl Client {
         let (tx, rx) = mpsc::unbounded_channel();
         let tokens = Tokens::new();
         let _ = tx.send(Internal::RescanShares(cfg.shared_dirs.clone()));
+        let _ = tx.send(Internal::SetUpnp(cfg.upnp));
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         tokio::spawn(read_server(server_reader, tx.clone()));
@@ -225,6 +231,7 @@ impl Client {
                 upload_slots: cfg.upload_slots.max(1),
                 upload_speed: 0,
                 distrib: Distrib::default(),
+                portmap_task: None,
             }
             .run(rx),
         );
@@ -330,6 +337,14 @@ impl Client {
             .map_err(|_| ShutDown)
     }
 
+    /// Turns automatic port forwarding (UPnP) on or off. Progress arrives
+    /// as [`Event::PortMap`].
+    pub fn set_upnp(&self, enabled: bool) -> Result<(), ShutDown> {
+        self.tx
+            .send(Internal::SetUpnp(enabled))
+            .map_err(|_| ShutDown)
+    }
+
     /// Moves the listener to another port and tells the server. The result
     /// arrives as [`Event::ListenPort`]; on failure the old port stays.
     pub fn set_listen_port(&self, port: u16) -> Result<(), ShutDown> {
@@ -394,6 +409,8 @@ pub(crate) enum Internal {
     },
     SetDownloadDir(PathBuf),
     SetListenPort(u16),
+    SetUpnp(bool),
+    PortMapped(Result<portmap::PortMapping, String>),
     Ping,
     RescanShares(Vec<PathBuf>),
     SharesScanned {
@@ -531,6 +548,8 @@ struct Actor {
     /// Speed of our last finished upload, reported in search results.
     upload_speed: u32,
     distrib: Distrib,
+    /// Keeps the UPnP mapping renewed while UPnP is on.
+    portmap_task: Option<tokio::task::AbortHandle>,
 }
 
 impl Actor {
@@ -554,6 +573,11 @@ impl Actor {
                 Internal::CancelDownload { id } => self.cancel_download(id),
                 Internal::SetDownloadDir(dir) => self.download_dir = dir,
                 Internal::SetListenPort(port) => self.set_listen_port(port).await,
+                Internal::SetUpnp(enabled) => self.set_upnp(enabled),
+                Internal::PortMapped(result) => self.emit(Event::PortMap(match result {
+                    Ok(mapping) => PortMapStatus::Mapped(mapping),
+                    Err(e) => PortMapStatus::Failed(e),
+                })),
                 Internal::Ping => self.send_server(ServerRequest::Ping).await,
                 Internal::RescanShares(dirs) => self.rescan_shares(dirs),
                 Internal::SharesScanned { index, errors } => {
@@ -644,17 +668,53 @@ impl Actor {
     async fn set_listen_port(&mut self, port: u16) {
         let result = match TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).await {
             Ok(listener) => {
-                self.accept_task.abort();
+                if self.portmap_task.is_some() {
+                    let old = self.listen_port;
+                    tokio::spawn(portmap::unmap(old));
+                }
                 self.listen_port = port;
+                self.accept_task.abort();
                 self.accept_task =
                     tokio::spawn(accept_loop(listener, self.internal.clone())).abort_handle();
                 self.send_server(ServerRequest::SetWaitPort { port: port.into() })
                     .await;
+                if self.portmap_task.is_some() {
+                    self.set_upnp(true);
+                }
                 Ok(())
             }
             Err(e) => Err(e.to_string()),
         };
         self.emit(Event::ListenPort { port, result });
+    }
+
+    /// Starts (or restarts, for a new port) or stops the UPnP mapping loop.
+    fn set_upnp(&mut self, enabled: bool) {
+        if let Some(task) = self.portmap_task.take() {
+            task.abort();
+        }
+        if !enabled {
+            tokio::spawn(portmap::unmap(self.listen_port));
+            self.emit(Event::PortMap(PortMapStatus::Disabled));
+            return;
+        }
+        self.emit(Event::PortMap(PortMapStatus::Trying));
+        let (port, tx) = (self.listen_port, self.internal.clone());
+        self.portmap_task = Some(
+            tokio::spawn(async move {
+                loop {
+                    let result = portmap::map(port).await;
+                    if let Err(e) = &result {
+                        tracing::info!(%e, "UPnP port mapping failed");
+                    }
+                    if tx.send(Internal::PortMapped(result)).is_err() {
+                        return;
+                    }
+                    tokio::time::sleep(portmap::RENEW_EVERY).await;
+                }
+            })
+            .abort_handle(),
+        );
     }
 
     fn emit(&self, event: Event) {

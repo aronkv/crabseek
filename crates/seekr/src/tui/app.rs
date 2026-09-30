@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use seekr_net::{Client, DistribStatus, DownloadState, Event};
+use seekr_net::{Client, DistribStatus, DownloadState, Event, PortMapStatus};
 use seekr_proto::search::{SearchFile, SearchResponse};
 use seekr_proto::shares::SharedFileList;
 
@@ -98,6 +98,7 @@ pub struct App {
     pub uploads_offset: usize,
     pub shares: SharesStatus,
     pub distrib: DistribStatus,
+    pub portmap: PortMapStatus,
     /// Searches by other users that our shares answered this session.
     pub searches_answered: u64,
     pub settings: Settings,
@@ -141,8 +142,18 @@ impl App {
             uploads_offset: 0,
             shares: SharesStatus::Scanning,
             distrib: DistribStatus::Searching,
+            portmap: if cfg.upnp {
+                PortMapStatus::Trying
+            } else {
+                PortMapStatus::Disabled
+            },
             searches_answered: 0,
-            settings: Settings::new(cfg.download_dir()?, cfg.listen_port, cfg.shared_dirs()?),
+            settings: Settings::new(
+                cfg.download_dir()?,
+                cfg.listen_port,
+                cfg.upnp,
+                cfg.shared_dirs()?,
+            ),
             status: String::new(),
             connected: true,
             page_size: 10,
@@ -253,6 +264,7 @@ impl App {
             } => self.uploads.update(id, username, filename, state),
             Event::SharesScanning => self.shares = SharesStatus::Scanning,
             Event::Distrib(status) => self.distrib = status,
+            Event::PortMap(status) => self.portmap = status,
             Event::SearchAnswered { .. } => self.searches_answered += 1,
             Event::SharesScanned {
                 folders,
@@ -372,6 +384,14 @@ impl App {
                 };
                 return;
             }
+            SettingsAction::SetUpnp(enabled) => config::save_upnp(enabled).map(|()| {
+                let _ = self.client.set_upnp(enabled);
+                if enabled {
+                    "opening the port on the router...".to_owned()
+                } else {
+                    "automatic port forwarding off".to_owned()
+                }
+            }),
             SettingsAction::SetSharedDirs(dirs) => config::save_shared_dirs(&dirs).map(|()| {
                 let _ = self.client.rescan_shares(dirs);
                 "shared folders saved, rescanning...".to_owned()

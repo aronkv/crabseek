@@ -6,7 +6,7 @@ use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Paragraph, Row as TableRow, Table, TableState, Tabs};
-use seekr_net::{DistribStatus, DownloadState, UploadState};
+use seekr_net::{DistribStatus, DownloadState, PortMapStatus, UploadState};
 
 use super::app::{App, Focus, SharesStatus, Tab};
 use super::results::{FormatFilter, Results, Row};
@@ -561,7 +561,7 @@ fn help_line(app: &App) -> &'static str {
             " Tab complete folder · Enter save · Esc cancel · Ctrl-u clear"
         }
         (Tab::Settings, _) => {
-            " j/k move · Enter edit · a add shared folder · x remove · / search · Tab/Alt-1…5 tabs · q quit"
+            " j/k move · Enter edit/toggle · a add shared folder · x remove · / search · Tab/Alt-1…5 tabs · q quit"
         }
     }
 }
@@ -613,6 +613,37 @@ fn render_settings(frame: &mut Frame, app: &mut App, area: Rect) {
         Line::from("  TCP port other users connect to; forward it on your router.").dark_gray(),
     );
     push_item(&mut lines, 1, Item::ListenPort, s.listen_port.to_string());
+    push_item(
+        &mut lines,
+        2,
+        Item::Upnp,
+        format!(
+            "[{}] open it on the router automatically (UPnP)",
+            if s.upnp { "x" } else { " " }
+        ),
+    );
+    lines.push(match &app.portmap {
+        PortMapStatus::Disabled => {
+            Line::from("  off – forward the port on your router by hand").dark_gray()
+        }
+        PortMapStatus::Trying => Line::from("  asking the router...").yellow(),
+        PortMapStatus::Mapped(m) if m.behind_another_nat() => Line::from(format!(
+            "  port {} open on the router, but the router sits behind another NAT ({}) – \
+             that device may need a forward too",
+            m.port,
+            m.external_ip.map(|ip| ip.to_string()).unwrap_or_default()
+        ))
+        .yellow(),
+        PortMapStatus::Mapped(m) if m.already_mapped => Line::from(format!(
+            "  the router already forwards port {} (manual rule)",
+            m.port
+        ))
+        .green(),
+        PortMapStatus::Mapped(m) => {
+            Line::from(format!("  port {} open on the router", m.port)).green()
+        }
+        PortMapStatus::Failed(e) => Line::from(format!("  {e} – forward the port by hand")).red(),
+    });
     lines.push(Line::default());
     lines.push(Line::from("Distributed network").bold());
     lines.push(
@@ -649,11 +680,11 @@ fn render_settings(frame: &mut Frame, app: &mut App, area: Rect) {
         .green(),
     );
     for (i, dir) in s.shared.iter().enumerate() {
-        push_item(&mut lines, i + 2, Item::Shared(i), display_path(dir));
+        push_item(&mut lines, i + 3, Item::Shared(i), display_path(dir));
     }
     push_item(
         &mut lines,
-        s.shared.len() + 2,
+        s.shared.len() + 3,
         Item::AddShared,
         "+ add folder".to_owned(),
     );

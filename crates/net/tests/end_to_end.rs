@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::{BufMut, BytesMut};
-use seekr_net::{Client, ClientConfig, DownloadState, Event, UploadState};
+use seekr_net::{Client, ClientConfig, ConnectMethod, DownloadState, Event, UploadState};
 use seekr_proto::wire::{Reader, WireWrite};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -234,6 +234,7 @@ async fn start(
         shared_dirs,
         share_cache: None,
         upload_slots: 2,
+        upnp: false,
     })
     .await
     .unwrap();
@@ -504,5 +505,47 @@ async fn browse_shares() {
             ("Music\\A\\B".to_owned(), vec!["two.mp3".to_owned()]),
         ]
     );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// After a listen-port change, peers reach us on the new port.
+#[tokio::test]
+async fn listen_port_change_keeps_us_reachable() {
+    let root = temp_dir("port-change");
+    let share = root.join("Music");
+    std::fs::create_dir_all(&share).unwrap();
+    std::fs::write(share.join("x.flac"), b"x").unwrap();
+    let server = fake_server(&[]).await;
+    let (alice, mut alice_events) = start(&server, "alice", &root.join("a"), vec![share]).await;
+    wait_for(&mut alice_events, |e| match e {
+        Event::SharesScanned { .. } => Some(()),
+        _ => None,
+    })
+    .await;
+
+    let new_port = free_port().await;
+    alice.set_listen_port(new_port).unwrap();
+    let result = wait_for(&mut alice_events, |e| match e {
+        Event::ListenPort { port, result } if port == new_port => Some(result),
+        _ => None,
+    })
+    .await;
+    assert_eq!(result, Ok(()));
+
+    let (bob, mut bob_events) = start(&server, "bob", &root.join("b"), vec![]).await;
+    bob.browse("alice").unwrap();
+    // Direct, not through the indirect fallback: the new listener works.
+    let method = wait_for(&mut bob_events, |e| match e {
+        Event::PeerConnected { username, method } if username == "alice" => Some(method),
+        Event::PeerConnectFailed { reason, .. } => panic!("alice unreachable: {reason}"),
+        _ => None,
+    })
+    .await;
+    assert_eq!(method, ConnectMethod::Direct);
+    wait_for(&mut bob_events, |e| match e {
+        Event::BrowseResult { username, .. } if username == "alice" => Some(()),
+        _ => None,
+    })
+    .await;
     std::fs::remove_dir_all(root).unwrap();
 }
