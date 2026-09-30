@@ -31,6 +31,9 @@ pub use downloads::{DownloadId, DownloadState};
 /// produced a connection by then.
 const PENDING_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The spec allows at most one `ServerPing` a minute.
+const PING_INTERVAL: Duration = Duration::from_secs(60);
+
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
     pub server: String,
@@ -91,6 +94,11 @@ pub enum Event {
         filename: String,
         state: DownloadState,
     },
+    /// Outcome of [`Client::set_listen_port`].
+    ListenPort {
+        port: u16,
+        result: Result<(), String>,
+    },
     /// Server messages the client does not handle itself.
     ServerMessage(ServerResponse),
     /// The actor stops after this.
@@ -124,6 +132,7 @@ impl Client {
             port: cfg.listen_port.into(),
         })
         .await?;
+        conn.send(&ServerRequest::SetStatus { status: 2 }).await?;
         let (server_reader, server_writer) = conn.split();
 
         let (tx, rx) = mpsc::unbounded_channel();
@@ -131,7 +140,18 @@ impl Client {
         let (event_tx, event_rx) = mpsc::unbounded_channel();
 
         tokio::spawn(read_server(server_reader, tx.clone()));
-        tokio::spawn(accept_loop(listener, tx.clone()));
+        let accept_task = tokio::spawn(accept_loop(listener, tx.clone())).abort_handle();
+        let ping_tx = tx.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(PING_INTERVAL);
+            interval.tick().await; // the first tick is immediate
+            loop {
+                interval.tick().await;
+                if ping_tx.send(Internal::Ping).is_err() {
+                    return;
+                }
+            }
+        });
         tokio::spawn(
             Actor {
                 own_username: cfg.username,
@@ -147,6 +167,7 @@ impl Client {
                 next_conn_id: 0,
                 downloads: HashMap::new(),
                 download_dir: cfg.download_dir,
+                accept_task,
             }
             .run(rx),
         );
@@ -224,6 +245,14 @@ impl Client {
     }
 
     /// Where downloads that start from now on are saved.
+    /// Moves the listener to another port and tells the server. The result
+    /// arrives as [`Event::ListenPort`]; on failure the old port stays.
+    pub fn set_listen_port(&self, port: u16) -> Result<(), ShutDown> {
+        self.tx
+            .send(Internal::SetListenPort(port))
+            .map_err(|_| ShutDown)
+    }
+
     pub fn set_download_dir(&self, dir: PathBuf) -> Result<(), ShutDown> {
         self.tx
             .send(Internal::SetDownloadDir(dir))
@@ -279,6 +308,8 @@ pub(crate) enum Internal {
         id: DownloadId,
     },
     SetDownloadDir(PathBuf),
+    SetListenPort(u16),
+    Ping,
     /// An `F` connection whose `FileTransferInit` has been read.
     FileConnection {
         username: String,
@@ -354,6 +385,7 @@ struct Actor {
     next_conn_id: ConnId,
     downloads: HashMap<DownloadId, Download>,
     download_dir: PathBuf,
+    accept_task: tokio::task::AbortHandle,
 }
 
 impl Actor {
@@ -376,6 +408,8 @@ impl Actor {
                 } => self.start_download(id, username, filename).await,
                 Internal::CancelDownload { id } => self.cancel_download(id),
                 Internal::SetDownloadDir(dir) => self.download_dir = dir,
+                Internal::SetListenPort(port) => self.set_listen_port(port).await,
+                Internal::Ping => self.send_server(ServerRequest::Ping).await,
                 Internal::FileConnection {
                     username,
                     token,
@@ -438,6 +472,21 @@ impl Actor {
                 }
             }
         }
+    }
+
+    async fn set_listen_port(&mut self, port: u16) {
+        let result = match TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).await {
+            Ok(listener) => {
+                self.accept_task.abort();
+                self.accept_task =
+                    tokio::spawn(accept_loop(listener, self.internal.clone())).abort_handle();
+                self.send_server(ServerRequest::SetWaitPort { port: port.into() })
+                    .await;
+                Ok(())
+            }
+            Err(e) => Err(e.to_string()),
+        };
+        self.emit(Event::ListenPort { port, result });
     }
 
     fn emit(&self, event: Event) {

@@ -93,7 +93,15 @@ async fn login_then_run(
                     if from_form {
                         config::save_credentials(&cfg.username, &cfg.password)?;
                     }
-                    let app = App::new(client, cfg.username.clone(), &cfg)?;
+                    let downloads_path = config::downloads_path()?;
+                    let saved = crate::persist::load(&downloads_path);
+                    let app = App::new(
+                        client,
+                        cfg.username.clone(),
+                        &cfg,
+                        saved,
+                        Some(downloads_path),
+                    )?;
                     return event_loop(terminal, &mut input, app, events).await;
                 }
                 Err(e) => {
@@ -168,9 +176,10 @@ async fn event_loop(
                 }
                 None => client_alive = false,
             },
-            _ = tick.tick() => {}
+            _ = tick.tick() => app.persist(),
         }
     }
+    app.persist();
     Ok(())
 }
 
@@ -189,7 +198,14 @@ mod tests {
     use crate::config::Config;
 
     fn app_with_results() -> App {
-        let mut app = App::new(Client::offline(), "me".into(), &Config::default()).unwrap();
+        let mut app = App::new(
+            Client::offline(),
+            "me".into(),
+            &Config::default(),
+            vec![],
+            None,
+        )
+        .unwrap();
         app.search = Some(ActiveSearch {
             token: 1,
             query: "boards of canada".into(),
@@ -310,6 +326,45 @@ mod tests {
         // Keys go to the path editor, not to tab switching.
         app.on_key(KeyEvent::from(KeyCode::Char('1')));
         assert_eq!(app.tab, Tab::Settings);
+    }
+
+    #[test]
+    fn restores_saved_downloads() {
+        use crate::persist::{SavedDownload, SavedStatus};
+        let saved = vec![
+            SavedDownload {
+                username: "a".into(),
+                filename: "x\\1.flac".into(),
+                status: SavedStatus::Completed {
+                    path: "/m/1.flac".into(),
+                },
+            },
+            SavedDownload {
+                username: "a".into(),
+                filename: "x\\2.flac".into(),
+                status: SavedStatus::Pending,
+            },
+        ];
+        let app = App::new(
+            Client::offline(),
+            "me".into(),
+            &Config::default(),
+            saved,
+            None,
+        )
+        .unwrap();
+        assert_eq!(app.transfers.list.len(), 2);
+        assert!(matches!(
+            app.transfers.list[0].state,
+            DownloadState::Completed { .. }
+        ));
+        // The offline client cannot queue, so the pending one is marked failed
+        // instead of disappearing.
+        assert!(matches!(
+            app.transfers.list[1].state,
+            DownloadState::Failed { .. }
+        ));
+        assert!(!app.transfers.dirty);
     }
 
     #[test]

@@ -1,5 +1,6 @@
 //! TUI state and input handling; rendering lives in `ui.rs`.
 
+use std::path::PathBuf;
 use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -9,6 +10,7 @@ use super::results::Results;
 use super::settings::{Settings, SettingsAction};
 use super::transfers::Transfers;
 use crate::config::{self, Config};
+use crate::persist::{self, SavedDownload, SavedStatus};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -47,12 +49,20 @@ pub struct App {
     /// Rows visible in the current list, for page up/down.
     pub page_size: usize,
     pub quit: bool,
+    /// Where the download list is saved; `None` in tests.
+    downloads_path: Option<PathBuf>,
     confirm_quit: bool,
 }
 
 impl App {
-    pub fn new(client: Client, username: String, cfg: &Config) -> anyhow::Result<Self> {
-        Ok(Self {
+    pub fn new(
+        client: Client,
+        username: String,
+        cfg: &Config,
+        saved: Vec<SavedDownload>,
+        downloads_path: Option<PathBuf>,
+    ) -> anyhow::Result<Self> {
+        let mut app = Self {
             client,
             username,
             tab: Tab::Search,
@@ -63,13 +73,69 @@ impl App {
             results_offset: 0,
             transfers: Transfers::default(),
             transfers_offset: 0,
-            settings: Settings::new(cfg.download_dir()?, cfg.shared_dirs()?),
+            settings: Settings::new(cfg.download_dir()?, cfg.listen_port, cfg.shared_dirs()?),
             status: String::new(),
             connected: true,
             page_size: 10,
             quit: false,
             confirm_quit: false,
-        })
+            downloads_path,
+        };
+        app.restore(saved);
+        Ok(app)
+    }
+
+    /// Puts the saved list back: finished entries as they were, unfinished
+    /// ones queued again (they resume from their `.part` files).
+    fn restore(&mut self, saved: Vec<SavedDownload>) {
+        // Finished entries are only displayed; give them ids the client
+        // never hands out.
+        let mut restored_id = u64::MAX;
+        let mut next_restored_id = || {
+            restored_id -= 1;
+            restored_id
+        };
+        let mut requeued = 0;
+        for d in saved {
+            let (id, state) = match d.status {
+                SavedStatus::Pending => match self.client.download(&d.username, &d.filename) {
+                    Ok(id) => {
+                        requeued += 1;
+                        (id, DownloadState::Queued { place: None })
+                    }
+                    Err(e) => (
+                        next_restored_id(),
+                        DownloadState::Failed {
+                            reason: format!("could not queue again: {e}"),
+                        },
+                    ),
+                },
+                SavedStatus::Completed { path } => {
+                    (next_restored_id(), DownloadState::Completed { path })
+                }
+                SavedStatus::Failed { reason } => {
+                    (next_restored_id(), DownloadState::Failed { reason })
+                }
+            };
+            self.transfers.update(id, d.username, d.filename, state);
+        }
+        self.transfers.dirty = false;
+        if requeued > 0 {
+            self.status = format!("resuming {requeued} unfinished downloads from last time");
+        }
+    }
+
+    /// Saves the download list if it changed.
+    pub fn persist(&mut self) {
+        if !self.transfers.dirty {
+            return;
+        }
+        self.transfers.dirty = false;
+        if let Some(path) = &self.downloads_path
+            && let Err(e) = persist::save(path, &self.transfers.snapshot())
+        {
+            self.status = format!("could not save the download list: {e:#}");
+        }
     }
 
     pub fn on_event(&mut self, event: Event) {
@@ -89,6 +155,18 @@ impl App {
                     self.status = format!("saved {}", path.display());
                 }
                 self.transfers.update(id, username, filename, state);
+            }
+            Event::ListenPort { port, result } => {
+                self.status = match result
+                    .map_err(anyhow::Error::msg)
+                    .and_then(|()| config::save_listen_port(port))
+                {
+                    Ok(()) => {
+                        self.settings.listen_port = port;
+                        format!("listening on port {port} – forward it on your router")
+                    }
+                    Err(e) => format!("could not use port {port}: {e:#}"),
+                };
             }
             Event::ServerClosed { reason } => {
                 self.connected = false;
@@ -156,6 +234,13 @@ impl App {
                 let _ = self.client.set_download_dir(dir.clone());
                 format!("downloads now go to {}", config::display_path(&dir))
             }),
+            SettingsAction::SetListenPort(port) => {
+                self.status = match self.client.set_listen_port(port) {
+                    Ok(()) => format!("switching to port {port}..."),
+                    Err(e) => e.to_string(),
+                };
+                return;
+            }
             SettingsAction::SetSharedDirs(dirs) => config::save_shared_dirs(&dirs).map(|()| {
                 format!(
                     "saved {} shared folder{} (sharing starts in a coming version)",

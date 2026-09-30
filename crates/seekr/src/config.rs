@@ -114,6 +114,11 @@ pub fn display_path(path: &Path) -> String {
     }
 }
 
+/// The download list kept between runs.
+pub fn downloads_path() -> anyhow::Result<PathBuf> {
+    Ok(project_dirs()?.data_dir().join("downloads.json"))
+}
+
 /// Log file used while the TUI owns the terminal.
 pub fn log_path() -> anyhow::Result<PathBuf> {
     let dirs = project_dirs()?;
@@ -154,6 +159,12 @@ pub fn save_download_dir(dir: &Path) -> anyhow::Result<()> {
     })
 }
 
+pub fn save_listen_port(port: u16) -> anyhow::Result<()> {
+    update(|table| {
+        table.insert("listen_port".into(), i64::from(port).into());
+    })
+}
+
 pub fn save_shared_dirs(dirs: &[PathBuf]) -> anyhow::Result<()> {
     update(|table| {
         let list: Vec<toml::Value> = dirs.iter().map(|d| display_path(d).into()).collect();
@@ -186,7 +197,7 @@ fn update(change: impl FnOnce(&mut toml::Table)) -> anyhow::Result<()> {
 
 /// Writes `contents` readable only by the user, replacing `path`
 /// atomically so a crash never leaves a half-written config.
-fn write_private(path: &Path, contents: &str) -> anyhow::Result<()> {
+pub(crate) fn write_private(path: &Path, contents: &str) -> anyhow::Result<()> {
     let dir = path.parent().context("config path has no parent")?;
     fs::DirBuilder::new()
         .recursive(true)

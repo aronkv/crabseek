@@ -1,5 +1,6 @@
-//! The Settings tab: download folder and shared folders, edited in place
-//! with Tab completion. Changes are saved to the config right away.
+//! The Settings tab: download folder, listen port and shared folders,
+//! edited in place (folders with Tab completion). Changes are saved to the
+//! config right away.
 
 use std::path::{Path, PathBuf};
 
@@ -10,6 +11,7 @@ use crate::config::{display_path, expand_home};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Item {
     DownloadDir,
+    ListenPort,
     Shared(usize),
     AddShared,
 }
@@ -24,11 +26,14 @@ pub struct Edit {
 pub enum SettingsAction {
     None,
     SetDownloadDir(PathBuf),
+    /// Saved once the new port is actually bound.
+    SetListenPort(u16),
     SetSharedDirs(Vec<PathBuf>),
 }
 
 pub struct Settings {
     pub download_dir: PathBuf,
+    pub listen_port: u16,
     pub shared: Vec<PathBuf>,
     pub selected: usize,
     pub edit: Option<Edit>,
@@ -36,9 +41,10 @@ pub struct Settings {
 }
 
 impl Settings {
-    pub fn new(download_dir: PathBuf, shared: Vec<PathBuf>) -> Self {
+    pub fn new(download_dir: PathBuf, listen_port: u16, shared: Vec<PathBuf>) -> Self {
         Self {
             download_dir,
+            listen_port,
             shared,
             selected: 0,
             edit: None,
@@ -47,10 +53,15 @@ impl Settings {
     }
 
     pub fn items(&self) -> Vec<Item> {
-        let mut items = vec![Item::DownloadDir];
+        let mut items = vec![Item::DownloadDir, Item::ListenPort];
         items.extend((0..self.shared.len()).map(Item::Shared));
         items.push(Item::AddShared);
         items
+    }
+
+    /// Row index of the shared folder `i`.
+    fn shared_index(i: usize) -> usize {
+        i + 2
     }
 
     fn selected_item(&self) -> Item {
@@ -92,6 +103,7 @@ impl Settings {
     fn start_edit(&mut self, item: Item) {
         let text = match item {
             Item::DownloadDir => display_path(&self.download_dir),
+            Item::ListenPort => self.listen_port.to_string(),
             Item::Shared(i) => display_path(&self.shared[i]),
             Item::AddShared => "~/".to_owned(),
         };
@@ -103,7 +115,8 @@ impl Settings {
         let edit = self.edit.as_mut().expect("editing");
         match key.code {
             KeyCode::Esc => self.edit = None,
-            KeyCode::Tab => edit.text = complete(&edit.text),
+            KeyCode::Tab if edit.item != Item::ListenPort => edit.text = complete(&edit.text),
+            KeyCode::Char(c) if edit.item == Item::ListenPort && !c.is_ascii_digit() => {}
             KeyCode::Backspace => {
                 edit.text.pop();
             }
@@ -120,6 +133,20 @@ impl Settings {
     fn commit(&mut self) -> SettingsAction {
         let edit = self.edit.as_ref().expect("editing");
         let text = edit.text.trim();
+        if edit.item == Item::ListenPort {
+            return match text.parse::<u16>() {
+                // Ports below 1024 need root.
+                Ok(port) if port >= 1024 => {
+                    self.edit = None;
+                    self.error = None;
+                    SettingsAction::SetListenPort(port)
+                }
+                _ => {
+                    self.error = Some("Enter a port between 1024 and 65535.".to_owned());
+                    SettingsAction::None
+                }
+            };
+        }
         if text.is_empty() {
             self.error = Some("Enter a folder path.".to_owned());
             return SettingsAction::None;
@@ -141,6 +168,7 @@ impl Settings {
                 self.download_dir = path.clone();
                 SettingsAction::SetDownloadDir(path)
             }
+            Item::ListenPort => unreachable!("handled above"),
             item @ (Item::Shared(_) | Item::AddShared) => {
                 if !path.is_dir() {
                     self.error = Some(format!(
@@ -166,7 +194,7 @@ impl Settings {
                     Some(i) => self.shared[i] = path,
                     None => {
                         self.shared.push(path);
-                        self.selected = self.shared.len();
+                        self.selected = Self::shared_index(self.shared.len() - 1);
                     }
                 }
                 SettingsAction::SetSharedDirs(self.shared.clone())
@@ -264,7 +292,7 @@ mod tests {
     #[test]
     fn add_edit_remove_shared() {
         let dir = temp_tree("edit");
-        let mut s = Settings::new(dir.join("dl"), vec![]);
+        let mut s = Settings::new(dir.join("dl"), 2234, vec![]);
 
         s.on_key(key(KeyCode::Char('a')));
         s.edit.as_mut().unwrap().text.clear();
@@ -288,7 +316,7 @@ mod tests {
         assert_eq!(s.on_key(key(KeyCode::Enter)), SettingsAction::None);
         s.on_key(key(KeyCode::Esc));
 
-        s.selected = 1;
+        s.selected = 2;
         assert_eq!(
             s.on_key(key(KeyCode::Char('x'))),
             SettingsAction::SetSharedDirs(vec![])
@@ -297,9 +325,31 @@ mod tests {
     }
 
     #[test]
+    fn listen_port() {
+        let mut s = Settings::new(PathBuf::from("/dl"), 2234, vec![]);
+        s.selected = 1;
+        s.on_key(key(KeyCode::Enter));
+        assert_eq!(s.edit.as_ref().unwrap().text, "2234");
+        s.on_key(key(KeyCode::Char('u')));
+        for _ in 0..4 {
+            s.on_key(key(KeyCode::Backspace));
+        }
+        type_text(&mut s, "80x");
+        assert_eq!(s.edit.as_ref().unwrap().text, "80");
+        assert_eq!(s.on_key(key(KeyCode::Enter)), SettingsAction::None);
+        type_text(&mut s, "00");
+        assert_eq!(
+            s.on_key(key(KeyCode::Enter)),
+            SettingsAction::SetListenPort(8000)
+        );
+        // Only confirmed ports are shown; the app updates it on success.
+        assert_eq!(s.listen_port, 2234);
+    }
+
+    #[test]
     fn download_dir_may_not_exist_yet() {
         let dir = temp_tree("dl");
-        let mut s = Settings::new(dir.join("dl"), vec![]);
+        let mut s = Settings::new(dir.join("dl"), 2234, vec![]);
         s.on_key(key(KeyCode::Enter));
         s.edit.as_mut().unwrap().text = format!("{}/new/place", dir.display());
         assert_eq!(

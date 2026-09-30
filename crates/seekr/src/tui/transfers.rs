@@ -4,6 +4,8 @@ use std::time::Instant;
 
 use seekr_net::{DownloadId, DownloadState};
 
+use crate::persist::{SavedDownload, SavedStatus};
+
 pub struct Transfer {
     pub id: DownloadId,
     pub username: String,
@@ -35,6 +37,8 @@ pub struct Transfers {
     /// In the order they were queued.
     pub list: Vec<Transfer>,
     pub selected: usize,
+    /// Something worth saving changed (not just progress).
+    pub dirty: bool,
 }
 
 impl Transfers {
@@ -47,8 +51,14 @@ impl Transfers {
     ) {
         let now = Instant::now();
         let t = match self.list.iter_mut().find(|t| t.id == id) {
-            Some(t) => t,
+            Some(t) => {
+                if std::mem::discriminant(&t.state) != std::mem::discriminant(&state) {
+                    self.dirty = true;
+                }
+                t
+            }
             None => {
+                self.dirty = true;
                 self.list.push(Transfer {
                     id,
                     username,
@@ -96,14 +106,38 @@ impl Transfers {
 
     pub fn remove(&mut self, id: DownloadId) {
         self.list.retain(|t| t.id != id);
+        self.dirty = true;
         self.clamp();
     }
 
     pub fn clear_finished(&mut self) -> usize {
         let before = self.list.len();
         self.list.retain(|t| !t.is_finished());
+        self.dirty = true;
         self.clamp();
         before - self.list.len()
+    }
+
+    /// The list as saved between runs.
+    pub fn snapshot(&self) -> Vec<SavedDownload> {
+        self.list
+            .iter()
+            .map(|t| SavedDownload {
+                username: t.username.clone(),
+                filename: t.filename.clone(),
+                status: match &t.state {
+                    DownloadState::Queued { .. } | DownloadState::Transferring { .. } => {
+                        SavedStatus::Pending
+                    }
+                    DownloadState::Completed { path } => {
+                        SavedStatus::Completed { path: path.clone() }
+                    }
+                    DownloadState::Failed { reason } => SavedStatus::Failed {
+                        reason: reason.clone(),
+                    },
+                },
+            })
+            .collect()
     }
 
     fn clamp(&mut self) {

@@ -384,17 +384,23 @@ fn render_settings(frame: &mut Frame, app: &mut App, area: Rect) {
         display_path(&s.download_dir),
     );
     lines.push(Line::default());
+    lines.push(Line::from("Listen port").bold());
+    lines.push(
+        Line::from("  TCP port other users connect to; forward it on your router.").dark_gray(),
+    );
+    push_item(&mut lines, 1, Item::ListenPort, s.listen_port.to_string());
+    lines.push(Line::default());
     lines.push(Line::from("Shared folders").bold());
     lines.push(
         Line::from("  Music you offer to other users (sharing starts in a coming version).")
             .dark_gray(),
     );
     for (i, dir) in s.shared.iter().enumerate() {
-        push_item(&mut lines, i + 1, Item::Shared(i), display_path(dir));
+        push_item(&mut lines, i + 2, Item::Shared(i), display_path(dir));
     }
     push_item(
         &mut lines,
-        s.shared.len() + 1,
+        s.shared.len() + 2,
         Item::AddShared,
         "+ add folder".to_owned(),
     );

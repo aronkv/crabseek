@@ -21,6 +21,10 @@ mod code {
     pub const GET_PEER_ADDRESS: u32 = 3;
     pub const CONNECT_TO_PEER: u32 = 18;
     pub const FILE_SEARCH: u32 = 26;
+    pub const SET_STATUS: u32 = 28;
+    pub const SERVER_PING: u32 = 32;
+    pub const SHARED_FOLDERS_FILES: u32 = 35;
+    pub const SEND_UPLOAD_SPEED: u32 = 121;
     pub const CANT_CONNECT_TO_PEER: u32 = 1001;
 }
 
@@ -56,6 +60,21 @@ pub enum ServerRequest {
     FileSearch {
         token: u32,
         query: String,
+    },
+    /// 1 = away, 2 = online.
+    SetStatus {
+        status: i32,
+    },
+    /// Keep-alive, at most once a minute.
+    Ping,
+    /// How much we share, shown to other users.
+    SharedFoldersFiles {
+        folders: u32,
+        files: u32,
+    },
+    /// Bytes per second of a finished upload, for our speed statistics.
+    SendUploadSpeed {
+        speed: u32,
     },
 }
 
@@ -112,6 +131,20 @@ impl ServerRequest {
                 b.put_u32_le(code::FILE_SEARCH);
                 b.put_u32_le(*token);
                 b.put_string_wire(query);
+            }
+            Self::SetStatus { status } => {
+                b.put_u32_le(code::SET_STATUS);
+                b.put_i32_le(*status);
+            }
+            Self::Ping => b.put_u32_le(code::SERVER_PING),
+            Self::SharedFoldersFiles { folders, files } => {
+                b.put_u32_le(code::SHARED_FOLDERS_FILES);
+                b.put_u32_le(*folders);
+                b.put_u32_le(*files);
+            }
+            Self::SendUploadSpeed { speed } => {
+                b.put_u32_le(code::SEND_UPLOAD_SPEED);
+                b.put_u32_le(*speed);
             }
         });
     }
@@ -386,6 +419,31 @@ mod tests {
         assert_eq!(
             &buf[..],
             &[14, 0, 0, 0, 26, 0, 0, 0, 5, 0, 0, 0, 2, 0, 0, 0, b'a', b'b']
+        );
+    }
+
+    #[test]
+    fn small_requests() {
+        let enc = |msg: ServerRequest| {
+            let mut buf = BytesMut::new();
+            msg.encode(&mut buf);
+            buf.to_vec()
+        };
+        assert_eq!(enc(ServerRequest::Ping), [4, 0, 0, 0, 32, 0, 0, 0]);
+        assert_eq!(
+            enc(ServerRequest::SetStatus { status: 2 }),
+            [8, 0, 0, 0, 28, 0, 0, 0, 2, 0, 0, 0]
+        );
+        assert_eq!(
+            enc(ServerRequest::SharedFoldersFiles {
+                folders: 3,
+                files: 40
+            }),
+            [12, 0, 0, 0, 35, 0, 0, 0, 3, 0, 0, 0, 40, 0, 0, 0]
+        );
+        assert_eq!(
+            enc(ServerRequest::SendUploadSpeed { speed: 258 }),
+            [8, 0, 0, 0, 121, 0, 0, 0, 2, 1, 0, 0]
         );
     }
 

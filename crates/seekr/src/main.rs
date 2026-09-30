@@ -1,5 +1,6 @@
 mod config;
 mod download;
+mod persist;
 mod search;
 mod tui;
 
@@ -216,7 +217,7 @@ fn print_event(event: &Event) -> bool {
             state,
             ..
         } => println!("[{username}] {filename}: {state:?}"),
-        Event::ServerMessage(_) => {}
+        Event::ServerMessage(_) | Event::ListenPort { .. } => {}
         Event::ServerClosed { reason } => {
             println!("server connection closed: {reason}");
             return false;
