@@ -469,3 +469,40 @@ async fn search_as_branch_root() {
     assert_eq!(files.len(), 1);
     std::fs::remove_dir_all(root).unwrap();
 }
+
+#[tokio::test]
+async fn browse_shares() {
+    let root = temp_dir("browse");
+    let share = root.join("Music");
+    std::fs::create_dir_all(share.join("A").join("B")).unwrap();
+    std::fs::write(share.join("A").join("one.flac"), b"1").unwrap();
+    std::fs::write(share.join("A").join("B").join("two.mp3"), b"22").unwrap();
+
+    let server = fake_server(&[]).await;
+    let (_alice, mut alice_events) = start(&server, "alice", &root.join("a"), vec![share]).await;
+    wait_for(&mut alice_events, |e| match e {
+        Event::SharesScanned { .. } => Some(()),
+        _ => None,
+    })
+    .await;
+    let (bob, mut bob_events) = start(&server, "bob", &root.join("b"), vec![]).await;
+    bob.browse("alice").unwrap();
+    let list = wait_for(&mut bob_events, |e| match e {
+        Event::BrowseResult { username, list } if username == "alice" => Some(list),
+        _ => None,
+    })
+    .await;
+    let dirs: Vec<(String, Vec<String>)> = list
+        .dirs
+        .into_iter()
+        .map(|d| (d.path, d.files.into_iter().map(|f| f.filename).collect()))
+        .collect();
+    assert_eq!(
+        dirs,
+        [
+            ("Music\\A".to_owned(), vec!["one.flac".to_owned()]),
+            ("Music\\A\\B".to_owned(), vec!["two.mp3".to_owned()]),
+        ]
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}

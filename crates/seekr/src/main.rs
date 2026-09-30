@@ -63,6 +63,12 @@ enum Command {
         #[arg(long = "dir")]
         dirs: Vec<std::path::PathBuf>,
     },
+    /// List a user's shared folders.
+    Browse {
+        username: String,
+        #[arg(long, default_value_t = 60)]
+        timeout_secs: u64,
+    },
     /// Forget the saved username and password.
     Logout,
     /// Print the config file location.
@@ -100,6 +106,10 @@ async fn main() -> anyhow::Result<()> {
             search::run(client, events, &query, secs, top, full_paths).await
         }
         Command::Shares { query, dirs } => shares(query, dirs),
+        Command::Browse {
+            username,
+            timeout_secs,
+        } => browse(username, timeout_secs).await,
         Command::Logout => {
             if config::clear_credentials()? {
                 println!("logged out; run `seekr` to log in again");
@@ -176,6 +186,48 @@ fn shares(query: Option<String>, dirs: Vec<std::path::PathBuf>) -> anyhow::Resul
                 search::quality(f)
             );
         }
+    }
+    Ok(())
+}
+
+async fn browse(username: String, timeout_secs: u64) -> anyhow::Result<()> {
+    let (client, mut events) = start_client().await?;
+    println!("asking {username} for their share list...");
+    client.browse(&username)?;
+    let list = tokio::time::timeout(Duration::from_secs(timeout_secs), async {
+        loop {
+            match events.recv().await {
+                Some(Event::BrowseResult { username: u, list }) if u == username => {
+                    return Ok(list);
+                }
+                Some(Event::PeerConnectFailed {
+                    username: u,
+                    reason,
+                }) if u == username => {
+                    anyhow::bail!("could not reach {username}: {reason}")
+                }
+                Some(_) => {}
+                None => anyhow::bail!("client stopped"),
+            }
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("no share list from {username} within {timeout_secs}s"))??;
+
+    let files: usize = list.dirs.iter().map(|d| d.files.len()).sum();
+    let bytes: u64 = list
+        .dirs
+        .iter()
+        .flat_map(|d| &d.files)
+        .map(|f| f.size)
+        .sum();
+    println!(
+        "{username} shares {files} files in {} folders ({})",
+        list.dirs.len(),
+        search::human_size(bytes)
+    );
+    for dir in &list.dirs {
+        println!("  {}  ({} files)", dir.path, dir.files.len());
     }
     Ok(())
 }
@@ -290,6 +342,9 @@ fn print_event(event: &Event) -> bool {
             }
         }
         Event::Distrib(status) => println!("distributed network: {status:?}"),
+        Event::BrowseResult { username, list } => {
+            println!("[{username}] shares {} folders", list.dirs.len())
+        }
         Event::SearchAnswered {
             username,
             query,

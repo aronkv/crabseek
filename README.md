@@ -36,6 +36,8 @@ you type `seekr`, search, and download whole albums in a few keystrokes.
 - **Format filter:** cycle between all formats, FLAC, lossless, MP3 320, MP3 and
   M4A/AAC with `f`. Folder downloads take only the matching audio files, plus the
   cover art and lyrics next to them.
+- **Browse users:** `b` on any search result opens that user's whole share as the
+  same folder tree, with the format filter and one-key downloads.
 - **One-key downloads:** `d` on a file or a whole folder. Interrupted downloads resume
   from where they stopped (`.part` files), and name clashes never overwrite anything.
 - **Transfer view:** live progress, speed, queue position and failure reasons, with
@@ -128,7 +130,7 @@ Without this, you can still download from peers that are reachable themselves.
 | Where | Key | Action |
 |---|---|---|
 | everywhere | `/` | focus the search box |
-| | `Tab`, `Alt-1`–`4`, `F1`–`F4` | switch between Search, Downloads, Uploads and Settings |
+| | `Tab`, `Alt-1`–`5`, `F1`–`F5` | switch between Search, Downloads, Uploads, Settings and Browse |
 | | `q`, `Ctrl-c` | quit (`q` asks again while transfers are running) |
 | lists | `10j`, `10k`, `10↑` … | vim-style counts: move 10 rows (the count shows bottom left) |
 | | `5G` | jump to row 5 |
@@ -139,7 +141,10 @@ Without this, you can still download from peers that are reachable themselves.
 | | `Enter`, `Space` | open or close a folder |
 | | `l`/`h` | expand or collapse |
 | | `d` | download the file or the whole folder |
+| | `b` | browse all shares of that result's user |
 | | `f` / `F` | next or previous format filter |
+| browse | `/` | type another username (`Enter` loads it) |
+| | same keys as results | open folders, filter, `d` download |
 | downloads | `c` | cancel |
 | | `r` | retry a failed download |
 | | `x` | clear finished downloads |
@@ -155,6 +160,7 @@ seekr                                   # the TUI
 seekr search "artist album" --full-paths
 seekr download <user> '<remote\path\to\file.flac>'
 seekr userinfo <user>                   # test a peer connection
+seekr browse <user>                     # list a user's shared folders
 seekr shares ["query"] [--dir PATH]     # what you share, and what a search would find
 seekr logout                            # forget saved credentials
 seekr config-path                       # where the config lives
@@ -203,7 +209,8 @@ server = "server.slsknet.org:2242"      # default
 - [x] TUI with folder view, format filter and transfer list
 - [x] Sharing your music library and serving uploads
 - [x] Distributed search network (as a child node; relaying searches to children is next)
-- [ ] Browsing a user's shares, private messages, wishlist
+- [x] Browsing a user's shares
+- [ ] Private messages, wishlist
 - [ ] Automatic port mapping (UPnP / NAT-PMP)
 - [ ] AUR package
 

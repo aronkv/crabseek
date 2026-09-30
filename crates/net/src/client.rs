@@ -21,6 +21,7 @@ use seekr_proto::peer::{PeerMsg, UserInfo};
 use seekr_proto::peer_init::PeerInitMsg;
 use seekr_proto::search::SearchResponse;
 use seekr_proto::server::{ServerRequest, ServerResponse};
+use seekr_proto::shares::SharedFileList;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 
@@ -101,6 +102,11 @@ pub enum Event {
     },
     /// Results for a search started with [`Client::search`].
     SearchResult(SearchResponse),
+    /// A user's complete share list, after [`Client::browse`].
+    BrowseResult {
+        username: String,
+        list: SharedFileList,
+    },
     /// A download changed state (also sent for progress).
     Download {
         id: DownloadId,
@@ -268,6 +274,13 @@ impl Client {
             })
             .map_err(|_| ShutDown)?;
         Ok(token)
+    }
+
+    /// Asks `username` for everything they share. The answer arrives as
+    /// [`Event::BrowseResult`]; an unreachable user as
+    /// [`Event::PeerConnectFailed`].
+    pub fn browse(&self, username: impl Into<String>) -> Result<(), ShutDown> {
+        self.send_peer(username, PeerMsg::SharedFileListRequest)
     }
 
     /// Ignores further results for this search.
@@ -878,6 +891,9 @@ impl Actor {
                 } else {
                     tracing::debug!(%username, token = resp.token, "result for inactive search");
                 }
+            }
+            PeerMsg::SharedFileListResponse(list) => {
+                self.emit(Event::BrowseResult { username, list });
             }
             PeerMsg::UserInfoRequest => {
                 if let Some(handle) = self.peers.get(&username) {

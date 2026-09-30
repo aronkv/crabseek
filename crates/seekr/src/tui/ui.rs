@@ -9,7 +9,7 @@ use ratatui::widgets::{Block, Cell, Paragraph, Row as TableRow, Table, TableStat
 use seekr_net::{DistribStatus, DownloadState, UploadState};
 
 use super::app::{App, Focus, SharesStatus, Tab};
-use super::results::{FormatFilter, Row};
+use super::results::{FormatFilter, Results, Row};
 use super::settings::Item;
 use crate::config::{self, display_path};
 use crate::search::{human_size, quality};
@@ -30,6 +30,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Tab::Search => render_search(frame, app, body),
         Tab::Transfers => render_transfers(frame, app, body),
         Tab::Uploads => render_uploads(frame, app, body),
+        Tab::Browse => render_browse(frame, app, body),
         Tab::Settings => render_settings(frame, app, body),
     }
     frame.render_widget(
@@ -57,6 +58,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         counted("2 Downloads", app.transfers.active()),
         counted("3 Uploads", app.uploads.active()),
         Line::from(" 4 Settings "),
+        Line::from(" 5 Browse "),
     ];
     let selected = app.tab.index();
     frame.render_widget(
@@ -138,77 +140,117 @@ fn render_search(frame: &mut Frame, app: &mut App, area: Rect) {
             )
         }
     };
-    let block = Block::bordered().title(title).border_style(if editing {
-        Style::new().dark_gray()
+    let empty = if !app.results.is_empty() {
+        "no results in this format – press f to change the filter"
+    } else if app.search.is_some() {
+        "waiting for results..."
     } else {
-        Style::new().cyan()
-    });
-    let inner = block.inner(list_area);
-    frame.render_widget(block, list_area);
+        "type a query and press Enter"
+    };
+    render_result_list(
+        frame,
+        &mut app.results,
+        &mut app.results_offset,
+        &mut app.page_size,
+        ResultList {
+            area: list_area,
+            title,
+            focused: !editing,
+            empty,
+            show_user: true,
+        },
+    );
+}
 
-    if app.results.rows().is_empty() {
-        let msg = if !app.results.is_empty() {
-            "no results in this format – press f to change the filter"
-        } else if app.search.is_some() {
-            "waiting for results..."
+struct ResultList<'a> {
+    area: Rect,
+    title: String,
+    focused: bool,
+    empty: &'a str,
+    /// Search results show who has each folder; a browsed user's own
+    /// listing does not need it.
+    show_user: bool,
+}
+
+fn render_result_list(
+    frame: &mut Frame,
+    results: &mut Results,
+    offset: &mut usize,
+    page_size: &mut usize,
+    list: ResultList,
+) {
+    let block = Block::bordered()
+        .title(list.title)
+        .border_style(if list.focused {
+            Style::new().cyan()
         } else {
-            "type a query and press Enter"
-        };
-        frame.render_widget(Paragraph::new(msg).dark_gray(), inner);
+            Style::new().dark_gray()
+        });
+    let inner = block.inner(list.area);
+    frame.render_widget(block, list.area);
+
+    if results.rows().is_empty() {
+        frame.render_widget(Paragraph::new(list.empty).dark_gray(), inner);
         return;
     }
 
     let height = inner.height as usize;
-    app.page_size = height;
-    let selected = app.results.selected_index().unwrap_or(0);
-    app.results_offset = scroll(app.results_offset, selected, height);
-    let offset = app.results_offset;
-
-    let visible: Vec<Row> = app
-        .results
+    *page_size = height;
+    let selected = results.selected_index().unwrap_or(0);
+    *offset = scroll(*offset, selected, height);
+    let visible: Vec<Row> = results
         .rows()
         .iter()
-        .skip(offset)
+        .skip(*offset)
         .take(height)
         .copied()
         .collect();
     let rows: Vec<TableRow> = visible
         .into_iter()
-        .map(|row| result_row(app, row))
+        .map(|row| result_row(results, row, list.show_user))
         .collect();
-
-    let table = Table::new(
-        rows,
-        [
+    let widths = if list.show_user {
+        vec![
             Constraint::Fill(1),
             Constraint::Length(22),
             Constraint::Length(9),
             Constraint::Length(18),
             Constraint::Length(20),
-        ],
-    )
-    .row_highlight_style(if editing { Style::new() } else { SELECTED });
-    let mut state = TableState::new().with_selected(Some(selected - offset));
+        ]
+    } else {
+        vec![
+            Constraint::Fill(1),
+            Constraint::Length(22),
+            Constraint::Length(9),
+        ]
+    };
+    let table = Table::new(rows, widths).row_highlight_style(if list.focused {
+        SELECTED
+    } else {
+        Style::new()
+    });
+    let mut state = TableState::new().with_selected(Some(selected - *offset));
     frame.render_stateful_widget(table, inner, &mut state);
 }
 
-fn result_row(app: &App, row: Row) -> TableRow<'static> {
+fn result_row(results: &Results, row: Row, show_user: bool) -> TableRow<'static> {
     match row {
         Row::Folder(id) => {
-            let filter = app.results.filter();
-            let f = app.results.folder(id);
-            let marker = if app.results.is_expanded(id) {
+            let filter = results.filter();
+            let f = results.folder(id);
+            let marker = if results.is_expanded(id) {
                 "▾"
             } else {
                 "▸"
             };
-            let name = last_components(&f.path, 2);
+            // Browsing one user's tree, more of the path is useful.
+            let name = last_components(&f.path, if show_user { 2 } else { 4 });
             let availability = if f.slot_free {
                 Span::raw(format!("free  {}/s", human_size(f.avg_speed.into()))).green()
             } else {
                 Span::raw(format!("queue {}", f.queue_length)).yellow()
             };
-            TableRow::new(vec![
+            let mut cells = vec![
                 Cell::from(format!(
                     "{marker} {name}  ({})",
                     f.visible_files(filter).len()
@@ -216,18 +258,19 @@ fn result_row(app: &App, row: Row) -> TableRow<'static> {
                 .bold(),
                 Cell::from(f.quality(filter)),
                 Cell::from(human_size(f.total_size(filter))),
-                Cell::from(f.username.clone()).cyan(),
-                Cell::from(availability),
-            ])
+            ];
+            if show_user {
+                cells.push(Cell::from(f.username.clone()).cyan());
+                cells.push(Cell::from(availability));
+            }
+            TableRow::new(cells)
         }
         Row::File(id, i) => {
-            let file = &app.results.folder(id).files[i];
+            let file = &results.folder(id).files[i];
             TableRow::new(vec![
                 Cell::from(format!("    {}", file.basename())),
                 Cell::from(quality(file)).dark_gray(),
                 Cell::from(human_size(file.size)),
-                Cell::from(""),
-                Cell::from(""),
             ])
         }
     }
@@ -339,6 +382,76 @@ fn render_transfers(frame: &mut Frame, app: &mut App, area: Rect) {
     );
 }
 
+fn render_browse(frame: &mut Frame, app: &mut App, area: Rect) {
+    let [input_area, list_area] =
+        Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).areas(area);
+    let editing = app.browse_focus == Focus::Input;
+    let input_block = Block::bordered()
+        .title(" Browse user ")
+        .border_style(if editing {
+            Style::new().cyan()
+        } else {
+            Style::new().dark_gray()
+        });
+    frame.render_widget(
+        Paragraph::new(app.browse_input.as_str()).block(input_block),
+        input_area,
+    );
+    if editing {
+        let x = input_area.x + 1 + app.browse_input.chars().count() as u16;
+        frame.set_cursor_position(Position::new(
+            x.min(input_area.right().saturating_sub(2)),
+            input_area.y + 1,
+        ));
+    }
+
+    let (title, empty) = match &app.browse {
+        None => (
+            " Shares ".to_owned(),
+            "type a username and press Enter, or press b on a search result".to_owned(),
+        ),
+        Some(b) if b.loaded => {
+            let r = &mut app.browse_results;
+            let title = format!(
+                " {}: {} folders, {} files ",
+                b.username,
+                r.visible_folders(),
+                r.file_count()
+            );
+            let empty = if r.is_empty() {
+                format!("{} shares nothing", b.username)
+            } else {
+                "nothing in this format – press f to change the filter".to_owned()
+            };
+            (title, empty)
+        }
+        Some(b) => (
+            format!(" {} ", b.username),
+            match &b.error {
+                Some(e) => e.clone(),
+                None => format!(
+                    "asking {} for their share list... ({}s)",
+                    b.username,
+                    b.started.elapsed().as_secs()
+                ),
+            },
+        ),
+    };
+    render_result_list(
+        frame,
+        &mut app.browse_results,
+        &mut app.browse_offset,
+        &mut app.page_size,
+        ResultList {
+            area: list_area,
+            title,
+            focused: !editing,
+            empty: &empty,
+            show_user: false,
+        },
+    );
+}
+
 fn render_uploads(frame: &mut Frame, app: &mut App, area: Rect) {
     let completed = app.uploads.completed;
     let block = Block::bordered()
@@ -430,19 +543,25 @@ fn help_line(app: &App) -> &'static str {
     match (app.tab, app.focus) {
         (Tab::Search, Focus::Input) => " Enter search · Esc results · Ctrl-u clear · Ctrl-c quit",
         (Tab::Search, Focus::List) => {
-            " 10j/10k jump · j/k move · Enter open folder · h/l collapse/expand · d download · f/F format filter · / search · Tab/Alt-1…4 tabs · q quit"
+            " 10j/10k jump · j/k move · Enter open folder · h/l collapse/expand · d download · b browse user · f/F format filter · / search · Tab/Alt-1…5 tabs · q quit"
         }
         (Tab::Transfers, _) => {
-            " j/k move · c cancel · r retry failed · x clear finished · / search · Tab/Alt-1…4 tabs · q quit"
+            " j/k move · c cancel · r retry failed · x clear finished · / search · Tab/Alt-1…5 tabs · q quit"
+        }
+        (Tab::Browse, _) if app.browse_focus == Focus::Input => {
+            " Enter browse user · Esc list · Ctrl-u clear · Ctrl-c quit"
+        }
+        (Tab::Browse, _) => {
+            " j/k move · Enter open folder · d download · f/F format filter · / other user · Tab/Alt-1…5 tabs · q quit"
         }
         (Tab::Uploads, _) => {
-            " j/k move · c cancel · x clear finished · / search · Tab/Alt-1…4 tabs · q quit"
+            " j/k move · c cancel · x clear finished · / search · Tab/Alt-1…5 tabs · q quit"
         }
         (Tab::Settings, _) if app.settings.is_editing() => {
             " Tab complete folder · Enter save · Esc cancel · Ctrl-u clear"
         }
         (Tab::Settings, _) => {
-            " j/k move · Enter edit · a add shared folder · x remove · / search · Tab/Alt-1…4 tabs · q quit"
+            " j/k move · Enter edit · a add shared folder · x remove · / search · Tab/Alt-1…5 tabs · q quit"
         }
     }
 }

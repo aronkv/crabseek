@@ -394,6 +394,53 @@ mod tests {
     }
 
     #[test]
+    fn browse_from_search_result() {
+        use seekr_proto::shares::{SharedDirectory, SharedFileList};
+        let mut app = app_with_results();
+        app.on_key(KeyEvent::from(KeyCode::Char('b')));
+        assert_eq!(app.tab, Tab::Browse);
+        assert_eq!(app.browse.as_ref().unwrap().username, "alice");
+        assert!(draw(&mut app).contains("asking alice for their share list"));
+
+        let dir = |path: &str, name: &str| SharedDirectory {
+            path: path.into(),
+            files: vec![SearchFile {
+                filename: name.into(),
+                size: 1_000_000,
+                extension: "flac".into(),
+                attributes: vec![(1, 60), (4, 44100), (5, 16)],
+            }],
+        };
+        app.on_event(Event::BrowseResult {
+            username: "alice".into(),
+            list: SharedFileList {
+                dirs: vec![
+                    dir("Music\\Aphex Twin\\SAW 85-92", "01 - Xtal.flac"),
+                    dir(
+                        "Music\\Boards of Canada\\Geogaddi",
+                        "01 - Ready Lets Go.flac",
+                    ),
+                ],
+                private_dirs: vec![],
+            },
+        });
+        let screen = draw(&mut app);
+        println!("{screen}");
+        assert!(screen.contains("alice: 2 folders, 2 files"));
+        assert!(screen.contains("Aphex Twin\\SAW 85-92"));
+        // Downloading from the browse tree uses the full remote path.
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        app.on_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(
+            app.browse_results.selection_files(),
+            [(
+                "alice".to_owned(),
+                "Music\\Aphex Twin\\SAW 85-92\\01 - Xtal.flac".to_owned()
+            )]
+        );
+    }
+
+    #[test]
     fn download_key_on_offline_client_reports_error() {
         let mut app = app_with_results();
         app.on_key(KeyEvent::from(KeyCode::Char('d')));

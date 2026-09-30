@@ -5,6 +5,8 @@ use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use seekr_net::{Client, DistribStatus, DownloadState, Event};
+use seekr_proto::search::{SearchFile, SearchResponse};
+use seekr_proto::shares::SharedFileList;
 
 use super::results::Results;
 use super::settings::{Settings, SettingsAction};
@@ -19,10 +21,18 @@ pub enum Tab {
     Transfers,
     Uploads,
     Settings,
+    Browse,
 }
 
 impl Tab {
-    const ORDER: [Tab; 4] = [Tab::Search, Tab::Transfers, Tab::Uploads, Tab::Settings];
+    /// Tab-bar order; the numbers (`Alt-1`…`Alt-5`) follow it.
+    const ORDER: [Tab; 5] = [
+        Tab::Search,
+        Tab::Transfers,
+        Tab::Uploads,
+        Tab::Settings,
+        Tab::Browse,
+    ];
 
     pub fn index(self) -> usize {
         Self::ORDER.iter().position(|t| *t == self).unwrap()
@@ -47,6 +57,20 @@ pub enum Focus {
     List,
 }
 
+/// Which result tree a key acts on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Which {
+    Search,
+    Browse,
+}
+
+pub struct ActiveBrowse {
+    pub username: String,
+    pub started: Instant,
+    pub loaded: bool,
+    pub error: Option<String>,
+}
+
 pub struct ActiveSearch {
     pub token: u32,
     pub query: String,
@@ -63,6 +87,11 @@ pub struct App {
     pub results: Results,
     /// First visible result row; kept by the renderer.
     pub results_offset: usize,
+    pub browse: Option<ActiveBrowse>,
+    pub browse_input: String,
+    pub browse_focus: Focus,
+    pub browse_results: Results,
+    pub browse_offset: usize,
     pub transfers: Transfers,
     pub transfers_offset: usize,
     pub uploads: Uploads,
@@ -101,6 +130,11 @@ impl App {
             search: None,
             results: Results::default(),
             results_offset: 0,
+            browse: None,
+            browse_input: String::new(),
+            browse_focus: Focus::Input,
+            browse_results: Results::default(),
+            browse_offset: 0,
             transfers: Transfers::default(),
             transfers_offset: 0,
             uploads: Uploads::default(),
@@ -181,6 +215,25 @@ impl App {
                     self.results.add(resp);
                 }
             }
+            Event::BrowseResult { username, list } => {
+                if let Some(b) = &mut self.browse
+                    && b.username == username
+                    && !b.loaded
+                {
+                    b.loaded = true;
+                    self.browse_results = Results::default();
+                    self.browse_results
+                        .add(share_list_as_response(username, list));
+                }
+            }
+            Event::PeerConnectFailed { username, reason } => {
+                if let Some(b) = &mut self.browse
+                    && b.username == username
+                    && !b.loaded
+                {
+                    b.error = Some(format!("could not reach {username}: {reason}"));
+                }
+            }
             Event::Download {
                 id,
                 username,
@@ -245,6 +298,10 @@ impl App {
             self.on_input_key(key);
             return;
         }
+        if self.browse_focus == Focus::Input && self.tab == Tab::Browse {
+            self.on_browse_input_key(key);
+            return;
+        }
         // A path being edited takes every key.
         if self.tab == Tab::Settings && self.settings.is_editing() {
             self.on_settings_key(key);
@@ -271,12 +328,16 @@ impl App {
             KeyCode::Char('2') | KeyCode::F(2) => self.tab = Tab::Transfers,
             KeyCode::Char('3') | KeyCode::F(3) => self.tab = Tab::Uploads,
             KeyCode::Char('4') | KeyCode::F(4) => self.tab = Tab::Settings,
+            KeyCode::Char('5') | KeyCode::F(5) => self.tab = Tab::Browse,
+            // `/` edits the input of the current tab, or starts a search.
+            KeyCode::Char('/') if self.tab == Tab::Browse => self.browse_focus = Focus::Input,
             KeyCode::Char('/') => {
                 self.tab = Tab::Search;
                 self.focus = Focus::Input;
             }
             _ => match self.tab {
-                Tab::Search => self.on_results_key(key, count),
+                Tab::Search => self.on_results_key(key, count, Which::Search),
+                Tab::Browse => self.on_results_key(key, count, Which::Browse),
                 Tab::Transfers => self.on_transfers_key(key, count),
                 Tab::Uploads => self.on_uploads_key(key, count),
                 Tab::Settings => {
@@ -383,6 +444,51 @@ impl App {
         }
     }
 
+    fn on_browse_input_key(&mut self, key: KeyEvent) {
+        match key.code {
+            KeyCode::Enter => {
+                let user = self.browse_input.trim().to_owned();
+                if !user.is_empty() {
+                    self.start_browse(user);
+                }
+            }
+            KeyCode::Esc => self.browse_focus = Focus::List,
+            KeyCode::Backspace => {
+                self.browse_input.pop();
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.browse_input.clear()
+            }
+            KeyCode::Char(c) => self.browse_input.push(c),
+            _ => {}
+        }
+    }
+
+    /// Opens `username`'s shares on the Browse tab.
+    fn start_browse(&mut self, username: String) {
+        self.tab = Tab::Browse;
+        self.browse_focus = Focus::List;
+        self.browse_input = username.clone();
+        self.browse_results = Results::default();
+        self.browse_offset = 0;
+        self.browse = Some(ActiveBrowse {
+            username: username.clone(),
+            started: Instant::now(),
+            loaded: false,
+            error: None,
+        });
+        if let Err(e) = self.client.browse(username) {
+            self.status = e.to_string();
+        }
+    }
+
+    fn results_mut(&mut self, which: Which) -> &mut Results {
+        match which {
+            Which::Search => &mut self.results,
+            Which::Browse => &mut self.browse_results,
+        }
+    }
+
     fn start_search(&mut self, query: String) {
         if let Some(old) = self.search.take() {
             let _ = self.client.stop_search(old.token);
@@ -402,11 +508,19 @@ impl App {
         }
     }
 
-    fn on_results_key(&mut self, key: KeyEvent, count: Option<usize>) {
+    fn on_results_key(&mut self, key: KeyEvent, count: Option<usize>, which: Which) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let n = count.unwrap_or(1) as isize;
         let page = self.page_size.max(1) as isize * n;
-        let r = &mut self.results;
+        if key.code == KeyCode::Char('b') {
+            // Browse the user of the selected row.
+            if let Some((user, _)) = self.results_mut(which).selection_files().first() {
+                let user = user.clone();
+                self.start_browse(user);
+            }
+            return;
+        }
+        let r = self.results_mut(which);
         match key.code {
             KeyCode::Down | KeyCode::Char('j') => r.move_by(n),
             KeyCode::Up | KeyCode::Char('k') => r.move_by(-n),
@@ -422,15 +536,15 @@ impl App {
             KeyCode::Enter | KeyCode::Char(' ') => r.toggle(),
             KeyCode::Right | KeyCode::Char('l') => r.expand(),
             KeyCode::Left | KeyCode::Char('h') => r.collapse(),
-            KeyCode::Char('d') => self.download_selection(),
+            KeyCode::Char('d') => self.download_selection(which),
             KeyCode::Char('f') => r.set_filter(r.filter().next()),
             KeyCode::Char('F') => r.set_filter(r.filter().prev()),
             _ => {}
         }
     }
 
-    fn download_selection(&mut self) {
-        let files = self.results.selection_files();
+    fn download_selection(&mut self, which: Which) {
+        let files = self.results_mut(which).selection_files();
         let Some((username, _)) = files.first() else {
             return;
         };
@@ -498,5 +612,30 @@ impl App {
             }
             _ => {}
         }
+    }
+}
+
+/// A share list in the shape of a search response, so the Browse tab can
+/// reuse the result tree. File names get their folder path back.
+fn share_list_as_response(username: String, list: SharedFileList) -> SearchResponse {
+    let files = list
+        .dirs
+        .into_iter()
+        .flat_map(|dir| {
+            let path = dir.path;
+            dir.files.into_iter().map(move |f| SearchFile {
+                filename: format!("{path}\\{}", f.filename),
+                ..f
+            })
+        })
+        .collect();
+    SearchResponse {
+        username,
+        token: 0,
+        files,
+        slot_free: true,
+        avg_speed: 0,
+        queue_length: 0,
+        private_files: Vec::new(),
     }
 }
