@@ -143,6 +143,7 @@ Without this, you can still download from peers that are reachable themselves.
 | Where | Key | Action |
 |---|---|---|
 | everywhere | `s`, `/` | open the search box (seekr starts in the results list) |
+| | `?` | explain the current tab: what it is for, how it works, its keys |
 | | `Alt-s` | toggle between the search box and the results, also while typing |
 | | `Tab`, `Alt-1`–`7`, `F1`–`F7` | switch between Search, Downloads, Uploads, Settings, Browse, Buddies and Wishlist |
 | | `A` | add the user of the selected result, download or upload as a buddy |
@@ -158,7 +159,7 @@ Without this, you can still download from peers that are reachable themselves.
 | | `d` | download the file or the whole folder |
 | | `b` | browse all shares of that result's user |
 | | `f` / `F` | next or previous format filter |
-| browse | `/` | type another username (`Enter` loads it) |
+| browse | `/` | type a username (`Enter` loads it); the tab starts on the list |
 | | same keys as results | open folders, filter, `d` download |
 | downloads | `c` | cancel |
 | | `r` | retry a failed download |

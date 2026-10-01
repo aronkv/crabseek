@@ -5,7 +5,7 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Cell, Paragraph, Row as TableRow, Table, TableState, Tabs};
+use ratatui::widgets::{Block, Cell, Paragraph, Row as TableRow, Table, TableState, Tabs, Wrap};
 use seekr_net::{DistribStatus, DownloadState, PortMapStatus, UploadState};
 use seekr_proto::server::OnlineStatus;
 
@@ -45,8 +45,13 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     if let Some(count) = app.count {
         help_spans.push(Span::raw(format!(" {count} ")).black().on_yellow());
     }
+    help_spans.push(Span::raw(" ? help ·").cyan());
     help_spans.push(Span::raw(help_line(app)).dark_gray());
     frame.render_widget(Paragraph::new(Line::from(help_spans)), help);
+
+    if app.help {
+        super::help::render(frame, app.tab);
+    }
 }
 
 fn render_header(frame: &mut Frame, app: &App, area: Rect) {
@@ -349,8 +354,13 @@ fn render_transfers(frame: &mut Frame, app: &mut App, area: Rect) {
 
     if app.transfers.list.is_empty() {
         frame.render_widget(
-            Paragraph::new("nothing yet – select a file or folder in Search and press d")
-                .dark_gray(),
+            Paragraph::new(
+                "Nothing downloading. On the Search or Browse tab, select a file or a whole \
+                 folder and press d; it shows up here with its progress. Unfinished downloads \
+                 continue after a restart. ? explains more.",
+            )
+            .wrap(Wrap { trim: true })
+            .dark_gray(),
             inner,
         );
     } else {
@@ -469,7 +479,9 @@ fn render_browse(frame: &mut Frame, app: &mut App, area: Rect) {
     let (title, empty) = match &app.browse {
         None => (
             format!(" Shares{} ", filter_note(&mut app.browse_results)),
-            "type a username and press Enter, or press b on a search result".to_owned(),
+            "See everything one user shares. Press / to type a username, or b on a search \
+             result. ? explains more."
+                .to_owned(),
         ),
         Some(b) if b.loaded => {
             let r = &mut app.browse_results;
@@ -530,7 +542,10 @@ fn render_uploads(frame: &mut Frame, app: &mut App, area: Rect) {
             SharesStatus::Ready { files: 0, .. } => {
                 "you share nothing yet – add a folder in Settings (4)"
             }
-            _ => "nobody is downloading from you right now",
+            _ => {
+                "Nobody is downloading from you right now. When someone does, it shows up \
+                 here. Other users find your files through their searches and by browsing you."
+            }
         };
         frame.render_widget(Paragraph::new(hint).dark_gray(), inner);
         return;
@@ -645,8 +660,12 @@ fn render_wishlist(frame: &mut Frame, app: &mut App, area: Rect) {
     if w.items.is_empty() {
         frame.render_widget(
             Paragraph::new(
-                "nothing wished for yet – press a to add a query, or w on a search's results",
+                "The wishlist keeps searching for you in the background: the server allows one \
+                 search every 12 minutes, and seekr runs your wishes in turn, telling you when \
+                 new files turn up. Press a to add a wish, or w on a search's results. \
+                 ? explains more.",
             )
+            .wrap(Wrap { trim: true })
             .dark_gray(),
             inner,
         );
@@ -744,8 +763,13 @@ fn render_buddies(frame: &mut Frame, app: &mut App, area: Rect) {
 
     if b.list.is_empty() {
         frame.render_widget(
-            Paragraph::new("no buddies yet – press a to add one, or A on a search result")
-                .dark_gray(),
+            Paragraph::new(
+                "Buddies are users you want to keep an eye on: whether they are online, how \
+                 much they share. Press a to add one, or A on a search result, download or \
+                 upload. ? explains more.",
+            )
+            .wrap(Wrap { trim: true })
+            .dark_gray(),
             inner,
         );
         return;

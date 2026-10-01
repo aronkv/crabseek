@@ -2,6 +2,7 @@
 
 mod app;
 mod buddies;
+mod help;
 mod login;
 mod results;
 mod settings;
@@ -583,8 +584,10 @@ mod tests {
             }],
             private_dirs: vec![],
         };
-        app.browse_input = "alice".into();
         app.tab = Tab::Browse;
+        // Browse starts on its list; `/` opens the username box.
+        app.on_key(KeyEvent::from(KeyCode::Char('/')));
+        app.browse_input = "alice".into();
         app.on_key(KeyEvent::from(KeyCode::Enter));
         app.on_event(Event::BrowseResult {
             username: "alice".into(),
@@ -637,6 +640,44 @@ mod tests {
         app.on_key(KeyEvent::from(KeyCode::Char('j')));
         app.on_key(KeyEvent::from(KeyCode::Char('x')));
         assert_eq!(app.wishlist.queries(), ["boards of canada"]);
+    }
+
+    #[test]
+    fn help_window_and_list_focus_on_start() {
+        use crossterm::event::KeyModifiers;
+        let mut app = App::new(
+            Client::offline(),
+            "me".into(),
+            &Config::default(),
+            vec![],
+            None,
+        )
+        .unwrap();
+        // Both Search and Browse start on their lists, not in a text box.
+        assert_eq!(app.focus, Focus::List);
+        app.on_key(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::ALT));
+        assert_eq!(app.tab, Tab::Browse);
+        assert_eq!(app.browse_focus, Focus::List);
+        // So `?` opens the help instead of being typed.
+        app.on_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(app.help);
+        let screen = draw(&mut app);
+        assert!(screen.contains("Help – Browse"));
+        // Keys are swallowed while it is open; Esc closes it.
+        app.on_key(KeyEvent::from(KeyCode::Char('j')));
+        assert!(app.help);
+        app.on_key(KeyEvent::from(KeyCode::Esc));
+        assert!(!app.help);
+
+        app.on_key(KeyEvent::new(KeyCode::Char('7'), KeyModifiers::ALT));
+        app.on_key(KeyEvent::from(KeyCode::Char('?')));
+        let screen = draw(&mut app);
+        println!("{screen}");
+        assert!(screen.contains("Help – Wishlist"));
+        assert!(screen.contains("12 minutes"));
+        // `q` closes the help rather than quitting.
+        app.on_key(KeyEvent::from(KeyCode::Char('q')));
+        assert!(!app.help && !app.quit);
     }
 
     #[test]

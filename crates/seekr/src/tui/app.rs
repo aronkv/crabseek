@@ -125,6 +125,8 @@ pub struct App {
     confirm_quit: bool,
     /// Vim-style count typed before a motion (`10k`).
     pub count: Option<usize>,
+    /// The `?` help window is open.
+    pub help: bool,
 }
 
 impl App {
@@ -148,7 +150,7 @@ impl App {
             results_offset: 0,
             browse: None,
             browse_input: String::new(),
-            browse_focus: Focus::Input,
+            browse_focus: Focus::List,
             browse_results: Results::default(),
             browse_offset: 0,
             transfers: Transfers::default(),
@@ -177,6 +179,7 @@ impl App {
             quit: false,
             confirm_quit: false,
             count: None,
+            help: false,
             downloads_path,
             buddies_path: None,
             wishlist: Wishlist::default(),
@@ -468,6 +471,13 @@ impl App {
             self.quit = true;
             return;
         }
+        if self.help {
+            // The help window swallows keys until it is closed.
+            if matches!(key.code, KeyCode::Esc | KeyCode::Char('?' | 'q')) {
+                self.help = false;
+            }
+            return;
+        }
         if key.code != KeyCode::Char('q') {
             self.confirm_quit = false;
         }
@@ -513,6 +523,11 @@ impl App {
         {
             let digit = c as usize - '0' as usize;
             self.count = Some((self.count.unwrap_or(0) * 10 + digit).min(99_999));
+            return;
+        }
+        if key.code == KeyCode::Char('?') {
+            self.count = None;
+            self.help = true;
             return;
         }
         let count = self.count.take();
