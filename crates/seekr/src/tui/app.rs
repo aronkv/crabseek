@@ -311,7 +311,7 @@ impl App {
                     && !b.loaded
                 {
                     b.loaded = true;
-                    self.browse_results = Results::default();
+                    self.browse_results = Results::with_filter(self.browse_results.filter());
                     self.browse_results
                         .add(share_list_as_response(username, list));
                 }
@@ -652,7 +652,7 @@ impl App {
         self.tab = Tab::Browse;
         self.browse_focus = Focus::List;
         self.browse_input = username.clone();
-        self.browse_results = Results::default();
+        self.browse_results = Results::with_filter(self.browse_results.filter());
         self.browse_offset = 0;
         self.browse = Some(ActiveBrowse {
             username: username.clone(),
@@ -683,7 +683,7 @@ impl App {
                     query,
                     started: Instant::now(),
                 });
-                self.results = Results::default();
+                self.results = Results::with_filter(self.results.filter());
                 self.results_offset = 0;
                 self.status.clear();
             }

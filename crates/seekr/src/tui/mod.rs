@@ -548,6 +548,60 @@ mod tests {
     }
 
     #[test]
+    fn format_filter_survives_new_browse_and_search() {
+        use super::results::FormatFilter;
+        use seekr_proto::shares::{SharedDirectory, SharedFileList};
+
+        let mut app = app_with_results();
+        app.on_key(KeyEvent::from(KeyCode::Char('f')));
+        assert_eq!(app.results.filter(), FormatFilter::Flac);
+        // A new search keeps the format.
+        app.on_key(KeyEvent::from(KeyCode::Char('s')));
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(app.results.filter(), FormatFilter::Flac);
+
+        let share = |files: &[&str]| SharedFileList {
+            dirs: vec![SharedDirectory {
+                path: "Music\\Album".into(),
+                files: files
+                    .iter()
+                    .map(|name| SearchFile {
+                        filename: (*name).into(),
+                        size: 1_000_000,
+                        extension: String::new(),
+                        attributes: vec![],
+                    })
+                    .collect(),
+            }],
+            private_dirs: vec![],
+        };
+        app.browse_input = "alice".into();
+        app.tab = Tab::Browse;
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        app.on_event(Event::BrowseResult {
+            username: "alice".into(),
+            list: share(&["1.flac", "2.mp3", "cover.jpg"]),
+        });
+        app.on_key(KeyEvent::from(KeyCode::Char('f')));
+        let screen = draw(&mut app);
+        println!("{screen}");
+        // Totals, then what the filter lets through: the FLAC and the cover.
+        assert!(screen.contains("alice: 1 folders, 3 files · [FLAC] 1 folders, 2 files"));
+
+        // Browsing someone else keeps FLAC on.
+        app.on_key(KeyEvent::from(KeyCode::Char('/')));
+        app.browse_input = "bob".into();
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        assert!(draw(&mut app).contains("bob · [FLAC]"));
+        app.on_event(Event::BrowseResult {
+            username: "bob".into(),
+            list: share(&["1.mp3"]),
+        });
+        assert_eq!(app.browse_results.filter(), FormatFilter::Flac);
+        assert!(draw(&mut app).contains("nothing in this format"));
+    }
+
+    #[test]
     fn download_key_on_offline_client_reports_error() {
         let mut app = app_with_results();
         app.on_key(KeyEvent::from(KeyCode::Char('d')));

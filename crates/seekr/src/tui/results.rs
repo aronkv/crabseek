@@ -69,7 +69,8 @@ impl FormatFilter {
         match self {
             Self::All => true,
             Self::Flac => ext == "flac",
-            Self::Lossless => LOSSLESS.contains(&ext.as_str()),
+            // ALAC hides in `.m4a`; `is_lossy` tells it from AAC.
+            Self::Lossless => LOSSLESS.contains(&ext.as_str()) || (ext == "m4a" && !is_lossy(f)),
             Self::Mp3_320 => ext == "mp3" && f.bitrate().is_some_and(|b| b >= 320),
             Self::Mp3 => ext == "mp3",
             Self::M4a => matches!(ext.as_str(), "m4a" | "aac"),
@@ -82,11 +83,12 @@ impl Folder {
     /// plus every non-audio file.
     pub fn visible_files(&self, filter: FormatFilter) -> Vec<usize> {
         (0..self.files.len())
-            .filter(|&i| {
-                let f = &self.files[i];
-                !is_audio(f) || filter.matches(f)
-            })
+            .filter(|&i| shows(filter, &self.files[i]))
             .collect()
+    }
+
+    fn visible_count(&self, filter: FormatFilter) -> usize {
+        self.files.iter().filter(|f| shows(filter, f)).count()
     }
 
     /// Whether the folder has any audio file passing `filter`.
@@ -161,6 +163,19 @@ pub fn is_audio(f: &SearchFile) -> bool {
     AUDIO.contains(&extension(f).as_str())
 }
 
+/// Whether `f` is listed under `filter`: matching audio, and every
+/// non-audio file.
+fn shows(filter: FormatFilter, f: &SearchFile) -> bool {
+    !is_audio(f) || filter.matches(f)
+}
+
+fn cmp_ignore_case(a: &str, b: &str) -> std::cmp::Ordering {
+    a.chars()
+        .flat_map(char::to_lowercase)
+        .cmp(b.chars().flat_map(char::to_lowercase))
+        .then_with(|| a.cmp(b))
+}
+
 /// Free slot first, then short queues, then fast users; a user's folders
 /// stay together.
 fn display_order(a: &Folder, b: &Folder) -> std::cmp::Ordering {
@@ -168,8 +183,8 @@ fn display_order(a: &Folder, b: &Folder) -> std::cmp::Ordering {
         .cmp(&a.slot_free)
         .then(a.queue_length.cmp(&b.queue_length))
         .then(b.avg_speed.cmp(&a.avg_speed))
-        .then(a.username.cmp(&b.username))
-        .then(a.path.cmp(&b.path))
+        .then_with(|| cmp_ignore_case(&a.username, &b.username))
+        .then_with(|| cmp_ignore_case(&a.path, &b.path))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,9 +206,21 @@ pub struct Results {
     filter: FormatFilter,
     pub users: usize,
     file_count: usize,
+    /// Files listed under the current filter, kept up to date as folders
+    /// arrive and recounted when the filter changes.
+    shown_files: usize,
 }
 
 impl Results {
+    /// Empty results that keep using `filter`, so a new search or browse
+    /// does not reset the format the user picked.
+    pub fn with_filter(filter: FormatFilter) -> Self {
+        Self {
+            filter,
+            ..Self::default()
+        }
+    }
+
     pub fn add(&mut self, resp: SearchResponse) {
         if resp.files.is_empty() {
             return;
@@ -221,6 +248,7 @@ impl Results {
                 .partition_point(|&other| display_order(&folders[other], &folders[id]).is_lt());
             self.order.insert(pos, id);
             self.file_count += folders[id].files.len();
+            self.shown_files += self.shown_in(&self.folders[id]);
         }
         self.rows_dirty = true;
         if self.selected.is_none() {
@@ -236,6 +264,25 @@ impl Results {
         self.file_count
     }
 
+    pub fn folder_count(&self) -> usize {
+        self.folders.len()
+    }
+
+    /// Files in the folders shown under the current filter, counting only
+    /// the ones the filter lets through.
+    pub fn shown_file_count(&self) -> usize {
+        self.shown_files
+    }
+
+    /// Files `folder` contributes to the list under the current filter.
+    fn shown_in(&self, folder: &Folder) -> usize {
+        match self.filter {
+            FormatFilter::All => folder.files.len(),
+            filter if folder.passes(filter) => folder.visible_count(filter),
+            _ => 0,
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.folders.is_empty()
     }
@@ -246,7 +293,11 @@ impl Results {
 
     pub fn set_filter(&mut self, filter: FormatFilter) {
         self.filter = filter;
+        self.shown_files = self.folders.iter().map(|f| self.shown_in(f)).sum();
         self.rows_dirty = true;
+        // Move the cursor off a hidden row now, not at the next draw, so
+        // keys act on what will be shown.
+        self.rows();
     }
 
     /// Folders shown under the current filter.
@@ -280,12 +331,26 @@ impl Results {
                 }
             }
             self.rows_dirty = false;
-            // The selected row may have been filtered out.
             if !self.selected.is_some_and(|s| self.rows.contains(&s)) {
-                self.selected = self.rows.first().copied();
+                self.selected = self.nearest_visible();
             }
         }
         &self.rows
+    }
+
+    /// Where the cursor goes when the filter hid its row: the folder of a
+    /// hidden file, else the next shown folder below, else the one above.
+    fn nearest_visible(&self) -> Option<Row> {
+        let Some(Row::Folder(id) | Row::File(id, _)) = self.selected else {
+            return self.rows.first().copied();
+        };
+        let pos = self.order.iter().position(|&o| o == id)?;
+        let shown = |&&o: &&FolderId| self.folders[o].passes(self.filter);
+        self.order[pos..]
+            .iter()
+            .find(shown)
+            .or_else(|| self.order[..pos].iter().rev().find(shown))
+            .map(|&o| Row::Folder(o))
     }
 
     #[cfg(test)]
@@ -527,6 +592,112 @@ mod tests {
         assert_eq!(r.visible_folders(), 2);
         assert_eq!(FormatFilter::All.prev(), FormatFilter::M4a);
         assert_eq!(FormatFilter::M4a.next(), FormatFilter::All);
+    }
+
+    #[test]
+    fn shown_file_count_follows_filter() {
+        let mut r = Results::default();
+        r.add(response(
+            "u",
+            true,
+            1,
+            vec![
+                file("a\\1.flac", vec![]),
+                file("a\\1.mp3", vec![(0, 320)]),
+                file("a\\cover.jpg", vec![]),
+                file("b\\1.mp3", vec![(0, 128)]),
+            ],
+        ));
+        assert_eq!(r.shown_file_count(), 4);
+        r.set_filter(FormatFilter::Flac);
+        // The FLAC and the cover; folder b has no FLAC at all.
+        assert_eq!(r.shown_file_count(), 2);
+        assert_eq!(r.file_count(), 4);
+        assert_eq!(r.folder_count(), 2);
+    }
+
+    #[test]
+    fn cursor_stays_near_when_its_folder_is_filtered_out() {
+        let mut r = Results::default();
+        r.add(response(
+            "u",
+            true,
+            1,
+            vec![
+                file("a\\1.flac", vec![]),
+                file("a\\2.mp3", vec![]),
+                file("b\\1.mp3", vec![]),
+                file("c\\1.mp3", vec![]),
+                file("d\\1.flac", vec![]),
+                file("e\\1.mp3", vec![]),
+            ],
+        ));
+        r.move_by(2); // c, an MP3 folder
+        r.set_filter(FormatFilter::Flac);
+        // Not back to the top (a), but on to the next FLAC folder (d).
+        assert_eq!(r.selected_index(), Some(1));
+        assert_eq!(
+            r.selection_files(),
+            [("u".to_owned(), "d\\1.flac".to_owned())]
+        );
+
+        r.set_filter(FormatFilter::All);
+        r.move_to_end(); // e
+        r.set_filter(FormatFilter::Flac);
+        // Nothing below e passes, so the closest one above.
+        assert_eq!(r.selection_files()[0].1, "d\\1.flac");
+
+        // A hidden file row moves to its own folder when that still shows.
+        r.set_filter(FormatFilter::All);
+        r.move_to_start();
+        r.toggle(); // expand a: a, 1.flac, 2.mp3
+        r.move_by(2);
+        r.set_filter(FormatFilter::Flac);
+        assert_eq!(r.selected_index(), Some(0));
+        assert_eq!(r.selection_files().len(), 1);
+    }
+
+    #[test]
+    fn folders_sort_case_insensitively() {
+        let mut r = Results::default();
+        r.add(response(
+            "u",
+            true,
+            1,
+            vec![
+                file("Zebra\\1.mp3", vec![]),
+                file("abba\\1.mp3", vec![]),
+                file("Metallica\\1.mp3", vec![]),
+            ],
+        ));
+        let paths: Vec<String> = r
+            .rows()
+            .to_vec()
+            .iter()
+            .map(|row| match row {
+                Row::Folder(id) => r.folder(*id).path.clone(),
+                Row::File(..) => unreachable!(),
+            })
+            .collect();
+        assert_eq!(paths, ["abba", "Metallica", "Zebra"]);
+    }
+
+    #[test]
+    fn alac_counts_as_lossless() {
+        // 3:20 at ~1600 kbps: ALAC, not AAC.
+        let alac = SearchFile {
+            filename: "a\\1.m4a".into(),
+            size: 40_000_000,
+            extension: String::new(),
+            attributes: vec![(1, 200), (4, 44100), (5, 16)],
+        };
+        let aac = SearchFile {
+            size: 6_400_000,
+            ..alac.clone()
+        };
+        assert!(FormatFilter::Lossless.matches(&alac));
+        assert!(!FormatFilter::Lossless.matches(&aac));
+        assert!(FormatFilter::M4a.matches(&aac));
     }
 }
 

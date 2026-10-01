@@ -122,25 +122,16 @@ fn render_search(frame: &mut Frame, app: &mut App, area: Rect) {
     }
 
     let title = match &app.search {
-        None => " Results ".to_owned(),
+        None => format!(" Results{} ", filter_note(&mut app.results)),
         Some(s) => {
             let secs = s.started.elapsed().as_secs();
-            let filter = app.results.filter();
-            let shown = if filter == FormatFilter::All {
-                String::new()
-            } else {
-                format!(
-                    " · [{}] {} folders",
-                    filter.label(),
-                    app.results.visible_folders()
-                )
-            };
+            let note = filter_note(&mut app.results);
             format!(
-                " {:?}: {} users, {} files ({}s){shown} ",
+                " {:?}: {} users, {} files ({}s){note} ",
                 s.query,
                 app.results.users,
                 app.results.file_count(),
-                secs
+                secs,
             )
         }
     };
@@ -164,6 +155,24 @@ fn render_search(frame: &mut Frame, app: &mut App, area: Rect) {
             show_user: true,
         },
     );
+}
+
+/// ` · [FLAC] 12 folders, 140 files` while a format filter is on: what is
+/// actually listed, next to the unfiltered totals.
+fn filter_note(r: &mut Results) -> String {
+    let filter = r.filter();
+    if filter == FormatFilter::All {
+        return String::new();
+    }
+    if r.is_empty() {
+        return format!(" · [{}]", filter.label());
+    }
+    format!(
+        " · [{}] {} folders, {} files",
+        filter.label(),
+        r.visible_folders(),
+        r.shown_file_count()
+    )
 }
 
 struct ResultList<'a> {
@@ -411,16 +420,17 @@ fn render_browse(frame: &mut Frame, app: &mut App, area: Rect) {
 
     let (title, empty) = match &app.browse {
         None => (
-            " Shares ".to_owned(),
+            format!(" Shares{} ", filter_note(&mut app.browse_results)),
             "type a username and press Enter, or press b on a search result".to_owned(),
         ),
         Some(b) if b.loaded => {
             let r = &mut app.browse_results;
             let title = format!(
-                " {}: {} folders, {} files ",
+                " {}: {} folders, {} files{} ",
                 b.username,
-                r.visible_folders(),
-                r.file_count()
+                r.folder_count(),
+                r.file_count(),
+                filter_note(r)
             );
             let empty = if r.is_empty() {
                 format!("{} shares nothing", b.username)
@@ -430,7 +440,7 @@ fn render_browse(frame: &mut Frame, app: &mut App, area: Rect) {
             (title, empty)
         }
         Some(b) => (
-            format!(" {} ", b.username),
+            format!(" {}{} ", b.username, filter_note(&mut app.browse_results)),
             match &b.error {
                 Some(e) => e.clone(),
                 None => format!(
