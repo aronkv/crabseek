@@ -11,7 +11,7 @@
 </div>
 
 ```
-  1 Search  2 Downloads (3)  3 Uploads  4 Settings   ↓ 8.8 MB/s  sharing 4210 files  me ● online
+  1 Search  2 Downloads (3)  3 Uploads  4 Browse  5 Chat  6 Buddies  7 Wishlist  8 Settings  me ● online
 ┌ Search ────────────────────────────────────────────────────────────────────────────────────┐
 │boards of canada                                                                            │
 └────────────────────────────────────────────────────────────────────────────────────────────┘
@@ -152,7 +152,7 @@ Without this, you can still download from peers that are reachable themselves.
 | everywhere | `s`, `/` | open the search box (crabseek starts in the results list) |
 | | `?` | explain the current tab: what it is for, how it works, its keys |
 | | `Alt-s` | toggle between the search box and the results, also while typing |
-| | `Tab`, `Alt-1`–`8`, `F1`–`F8` | switch between Search, Downloads, Uploads, Settings, Browse, Buddies, Wishlist and Chat |
+| | `Tab`, `Alt-1`–`8`, `F1`–`F8` | switch between Search, Downloads, Uploads, Browse, Chat, Buddies, Wishlist and Settings |
 | | `m` | write a private message to the user of the selected row |
 | | `A` | add the user of the selected result, download or upload as a buddy |
 | | `q`, `Ctrl-c` | quit (`q` asks again while transfers are running) |
@@ -205,7 +205,7 @@ crabseek config-path                       # where the config lives
 ## Configuration
 
 The download folder, the listen port and the shared folders can be changed in the
-**Settings** tab (`4`); changes apply and are saved immediately. Everything lives in
+**Settings** tab (`8`); changes apply and are saved immediately. Everything lives in
 `~/.config/crabseek/config.toml`, and every key except the credentials is optional:
 
 ```toml

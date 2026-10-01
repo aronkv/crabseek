@@ -33,17 +33,36 @@ pub enum Tab {
 }
 
 impl Tab {
-    /// Tab-bar order; the numbers (`Alt-1`…`Alt-6`) follow it.
-    const ORDER: [Tab; 8] = [
+    /// Tab-bar order, close to Nicotine+'s; the numbers (`Alt-1`…`Alt-8`,
+    /// `F1`…`F8`) and titles follow it. Settings stays last.
+    pub const ORDER: [Tab; 8] = [
         Tab::Search,
         Tab::Transfers,
         Tab::Uploads,
-        Tab::Settings,
         Tab::Browse,
+        Tab::Chat,
         Tab::Buddies,
         Tab::Wishlist,
-        Tab::Chat,
+        Tab::Settings,
     ];
+
+    /// The tab for `Alt-n` / `Fn`.
+    fn numbered(n: u8) -> Option<Tab> {
+        Self::ORDER.get(usize::from(n).checked_sub(1)?).copied()
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Tab::Search => "Search",
+            Tab::Transfers => "Downloads",
+            Tab::Uploads => "Uploads",
+            Tab::Browse => "Browse",
+            Tab::Chat => "Chat",
+            Tab::Buddies => "Buddies",
+            Tab::Wishlist => "Wishlist",
+            Tab::Settings => "Settings",
+        }
+    }
 
     pub fn index(self) -> usize {
         Self::ORDER.iter().position(|t| *t == self).unwrap()
@@ -609,14 +628,9 @@ impl App {
             KeyCode::Char('q') => self.request_quit(),
             KeyCode::Tab => self.tab = self.tab.cycle(1),
             KeyCode::BackTab => self.tab = self.tab.cycle(-1),
-            KeyCode::Char('1') | KeyCode::F(1) => self.tab = Tab::Search,
-            KeyCode::Char('2') | KeyCode::F(2) => self.tab = Tab::Transfers,
-            KeyCode::Char('3') | KeyCode::F(3) => self.tab = Tab::Uploads,
-            KeyCode::Char('4') | KeyCode::F(4) => self.tab = Tab::Settings,
-            KeyCode::Char('5') | KeyCode::F(5) => self.tab = Tab::Browse,
-            KeyCode::Char('6') | KeyCode::F(6) => self.tab = Tab::Buddies,
-            KeyCode::Char('7') | KeyCode::F(7) => self.tab = Tab::Wishlist,
-            KeyCode::Char('8') | KeyCode::F(8) => self.tab = Tab::Chat,
+            // Digits only get here with Alt; plain ones are counts.
+            KeyCode::Char(c @ '1'..='8') => self.tab = Tab::numbered(c as u8 - b'0').unwrap(),
+            KeyCode::F(n @ 1..=8) => self.tab = Tab::numbered(n).unwrap(),
             // `m` writes to the user of the selected row.
             KeyCode::Char('m') if self.tab != Tab::Chat => {
                 if let Some(user) = self.selected_user() {

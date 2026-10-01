@@ -410,6 +410,8 @@ mod tests {
         app.on_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::ALT));
         assert_eq!(app.tab, Tab::Uploads);
         app.on_key(KeyEvent::from(KeyCode::F(4)));
+        assert_eq!(app.tab, Tab::Browse);
+        app.on_key(KeyEvent::from(KeyCode::F(8)));
         assert_eq!(app.tab, Tab::Settings);
     }
 
@@ -662,7 +664,7 @@ mod tests {
         .unwrap();
         // Both Search and Browse start on their lists, not in a text box.
         assert_eq!(app.focus, Focus::List);
-        app.on_key(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::ALT));
+        app.on_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::ALT));
         assert_eq!(app.tab, Tab::Browse);
         assert_eq!(app.browse_focus, Focus::List);
         // So `?` opens the help instead of being typed.
@@ -699,7 +701,7 @@ mod tests {
         });
         assert_eq!(app.chats.total_unread(), 1);
         assert!(app.status.starts_with("message from carol"));
-        assert!(draw(&mut app).contains("8 Chat (1)"));
+        assert!(draw(&mut app).contains("5 Chat (1)"));
 
         // `m` on a search result writes to that row's user.
         app.on_key(KeyEvent::from(KeyCode::Char('m')));
@@ -712,7 +714,7 @@ mod tests {
         app.on_key(KeyEvent::from(KeyCode::Esc));
 
         // Reading carol's conversation clears its unread count.
-        app.on_key(KeyEvent::new(KeyCode::Char('8'), KeyModifiers::ALT));
+        app.on_key(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::ALT));
         app.on_key(KeyEvent::from(KeyCode::Char('j')));
         assert_eq!(app.chats.selected().unwrap().username, "carol");
         assert_eq!(app.chats.total_unread(), 0);

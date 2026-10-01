@@ -66,19 +66,24 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
             label.to_owned()
         })
     };
-    let titles = vec![
-        Line::from("1 Search"),
-        counted("2 Downloads", app.transfers.active()),
-        counted("3 Uploads", app.uploads.active()),
-        Line::from("4 Settings"),
-        Line::from("5 Browse"),
-        counted("6 Buddies", app.buddies.online()),
-        Line::from(match app.wishlist.total_new() {
-            0 => "7 Wishlist".to_owned(),
-            n => format!("7 Wishlist ({n} new)"),
-        }),
-        counted("8 Chat", app.chats.total_unread()),
-    ];
+    let titles: Vec<Line> = Tab::ORDER
+        .iter()
+        .enumerate()
+        .map(|(i, tab)| {
+            let label = format!("{} {}", i + 1, tab.label());
+            match tab {
+                Tab::Transfers => counted(&label, app.transfers.active()),
+                Tab::Uploads => counted(&label, app.uploads.active()),
+                Tab::Buddies => counted(&label, app.buddies.online()),
+                Tab::Chat => counted(&label, app.chats.total_unread()),
+                Tab::Wishlist => match app.wishlist.total_new() {
+                    0 => Line::from(label),
+                    n => Line::from(format!("{label} ({n} new)")),
+                },
+                _ => Line::from(label),
+            }
+        })
+        .collect();
     let selected = app.tab.index();
     let tabs_width: u16 = titles.iter().map(|t| t.width() as u16 + 2).sum();
     frame.render_widget(
@@ -544,7 +549,7 @@ fn render_uploads(frame: &mut Frame, app: &mut App, area: Rect) {
     if app.uploads.list.is_empty() {
         let hint = match &app.shares {
             SharesStatus::Ready { files: 0, .. } => {
-                "you share nothing yet – add a folder in Settings (4)"
+                "you share nothing yet – add a folder in Settings (8)"
             }
             _ => {
                 "Nobody is downloading from you right now. When someone does, it shows up \
