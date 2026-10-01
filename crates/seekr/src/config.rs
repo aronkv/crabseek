@@ -137,6 +137,11 @@ pub fn downloads_path() -> anyhow::Result<PathBuf> {
     Ok(project_dirs()?.data_dir().join("downloads.json"))
 }
 
+/// Saved wishlist queries.
+pub fn wishlist_path() -> anyhow::Result<PathBuf> {
+    Ok(project_dirs()?.data_dir().join("wishlist.json"))
+}
+
 pub fn buddies_path() -> anyhow::Result<PathBuf> {
     Ok(project_dirs()?.data_dir().join("buddies.json"))
 }

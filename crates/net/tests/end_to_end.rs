@@ -241,8 +241,9 @@ async fn serve(stream: TcpStream, sessions: Sessions, watchers: Watchers, opts: 
                         .unwrap();
                 }
             }
-            // FileSearch: hand it to the distributed network.
-            26 => {
+            // FileSearch and WishlistSearch: hand them to the distributed
+            // network.
+            26 | 103 => {
                 let token = r.u32().unwrap();
                 let query = r.string().unwrap();
                 if let Some(searches) = &opts.searches {
@@ -690,5 +691,33 @@ async fn watch_user_status_and_stats() {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     assert_eq!((stats.files, stats.dirs), (1, 1));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn wishlist_search_finds_results() {
+    let root = temp_dir("wishlist");
+    let share = root.join("Music");
+    std::fs::create_dir_all(&share).unwrap();
+    std::fs::write(share.join("Kaini Industries.flac"), b"x").unwrap();
+    let server = fake_server_with(Opts {
+        embed_searches: true,
+        ..Opts::default()
+    })
+    .await;
+    let (_alice, mut alice_events) = start(&server, "alice", &root.join("a"), vec![share]).await;
+    wait_for(&mut alice_events, |e| match e {
+        Event::SharesScanned { .. } => Some(()),
+        _ => None,
+    })
+    .await;
+    let (bob, mut bob_events) = start(&server, "bob", &root.join("b"), vec![]).await;
+    let token = bob.wishlist_search("kaini").unwrap();
+    let files = wait_for(&mut bob_events, |e| match e {
+        Event::SearchResult(r) if r.token == token => Some(r.files.len()),
+        _ => None,
+    })
+    .await;
+    assert_eq!(files, 1);
     std::fs::remove_dir_all(root).unwrap();
 }

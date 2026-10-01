@@ -16,8 +16,13 @@ pub async fn run(
     secs: u64,
     top: usize,
     full_paths: bool,
+    wishlist: bool,
 ) -> anyhow::Result<()> {
-    let token = client.search(query)?;
+    let token = if wishlist {
+        client.wishlist_search(query)?
+    } else {
+        client.search(query)?
+    };
     println!("searching for {query:?} for {secs}s...");
 
     let mut results: Vec<SearchResponse> = Vec::new();

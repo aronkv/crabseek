@@ -51,6 +51,9 @@ enum Command {
         /// Print full remote paths, ready to paste into `download`.
         #[arg(long)]
         full_paths: bool,
+        /// Send it as a wishlist search (server code 103) instead.
+        #[arg(long)]
+        wishlist: bool,
     },
     /// Download one file. FILENAME is the full remote path, as printed
     /// by `search --full-paths`.
@@ -104,9 +107,10 @@ async fn main() -> anyhow::Result<()> {
             secs,
             top,
             full_paths,
+            wishlist,
         } => {
             let (client, events) = start_client().await?;
-            search::run(client, events, &query, secs, top, full_paths).await
+            search::run(client, events, &query, secs, top, full_paths, wishlist).await
         }
         Command::Shares { query, dirs } => shares(query, dirs),
         Command::Browse {

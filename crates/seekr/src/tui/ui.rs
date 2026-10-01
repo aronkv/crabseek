@@ -35,6 +35,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Tab::Browse => render_browse(frame, app, body),
         Tab::Settings => render_settings(frame, app, body),
         Tab::Buddies => render_buddies(frame, app, body),
+        Tab::Wishlist => render_wishlist(frame, app, body),
     }
     frame.render_widget(
         Paragraph::new(app.status.as_str()).fg(Color::Yellow),
@@ -49,22 +50,28 @@ pub fn render(frame: &mut Frame, app: &mut App) {
 }
 
 fn render_header(frame: &mut Frame, app: &App, area: Rect) {
+    // Tabs pads each title with one space on both sides.
     let counted = |label: &str, n: usize| {
         Line::from(if n > 0 {
-            format!(" {label} ({n}) ")
+            format!("{label} ({n})")
         } else {
-            format!(" {label} ")
+            label.to_owned()
         })
     };
     let titles = vec![
-        Line::from(" 1 Search "),
+        Line::from("1 Search"),
         counted("2 Downloads", app.transfers.active()),
         counted("3 Uploads", app.uploads.active()),
-        Line::from(" 4 Settings "),
-        Line::from(" 5 Browse "),
+        Line::from("4 Settings"),
+        Line::from("5 Browse"),
         counted("6 Buddies", app.buddies.online()),
+        Line::from(match app.wishlist.total_new() {
+            0 => "7 Wishlist".to_owned(),
+            n => format!("7 Wishlist ({n} new)"),
+        }),
     ];
     let selected = app.tab.index();
+    let tabs_width: u16 = titles.iter().map(|t| t.width() as u16 + 2).sum();
     frame.render_widget(
         Tabs::new(titles)
             .select(selected)
@@ -73,28 +80,69 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         area,
     );
 
+    // The right side gets what the tabs leave; when that is short, the
+    // least important parts go first (sharing, username, then speeds).
     let down = app.transfers.total_speed();
     let up = app.uploads.total_speed();
-    let mut right = vec![];
+    let mut parts: Vec<(u8, Span)> = Vec::new();
     if down > 0.0 {
-        right.push(Span::raw(format!("↓ {}/s  ", human_size(down as u64))));
+        parts.push((2, Span::raw(format!("↓ {}/s  ", human_size(down as u64)))));
     }
     if up > 0.0 {
-        right.push(Span::raw(format!("↑ {}/s  ", human_size(up as u64))));
+        parts.push((2, Span::raw(format!("↑ {}/s  ", human_size(up as u64)))));
     }
-    right.push(match &app.shares {
-        SharesStatus::Scanning => Span::raw("scanning shares  ").dark_gray(),
-        SharesStatus::Ready { files, .. } => {
-            Span::raw(format!("sharing {files} files  ")).dark_gray()
+    parts.push((
+        0,
+        match &app.shares {
+            SharesStatus::Scanning => Span::raw("scanning shares  ").dark_gray(),
+            SharesStatus::Ready { files, .. } => {
+                Span::raw(format!("sharing {files} files  ")).dark_gray()
+            }
+        },
+    ));
+    parts.push((1, Span::raw(format!("{} ", app.username))));
+    parts.push((
+        3,
+        if app.connected {
+            Span::raw("● online ").green()
+        } else {
+            Span::raw("● offline ").red()
+        },
+    ));
+    let room = area.width.saturating_sub(tabs_width + 1) as usize;
+    let mut keep: Vec<bool> = vec![true; parts.len()];
+    let width = |keep: &[bool]| -> usize {
+        parts
+            .iter()
+            .zip(keep)
+            .filter(|(_, k)| **k)
+            .map(|((_, s), _)| s.width())
+            .sum()
+    };
+    for priority in 0..3 {
+        if width(&keep) <= room {
+            break;
         }
-    });
-    right.push(Span::raw(format!("{} ", app.username)));
-    right.push(if app.connected {
-        Span::raw("● online ").green()
-    } else {
-        Span::raw("● offline ").red()
-    });
-    frame.render_widget(Paragraph::new(Line::from(right)).right_aligned(), area);
+        for (k, (p, _)) in keep.iter_mut().zip(&parts) {
+            if *p == priority {
+                *k = false;
+            }
+        }
+    }
+    let right: Vec<Span> = parts
+        .into_iter()
+        .zip(keep)
+        .filter_map(|((_, span), k)| k.then_some(span))
+        .collect();
+    let right_area = Rect {
+        x: area.x + tabs_width.min(area.width),
+        width: area.width.saturating_sub(tabs_width),
+        ..area
+    };
+    frame.render_widget(
+        Paragraph::new(Line::from(right)).right_aligned(),
+        right_area,
+    );
 }
 
 fn render_search(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -553,6 +601,109 @@ fn render_uploads(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_stateful_widget(table, inner, &mut state);
 }
 
+fn render_wishlist(frame: &mut Frame, app: &mut App, area: Rect) {
+    let list_area = match &app.wishlist.adding {
+        Some(input) => {
+            let [input_area, list_area] =
+                Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).areas(area);
+            frame.render_widget(
+                Paragraph::new(input.as_str()).block(
+                    Block::bordered()
+                        .title(" Add to wishlist ")
+                        .border_style(Style::new().cyan()),
+                ),
+                input_area,
+            );
+            let x = input_area.x + 1 + input.chars().count() as u16;
+            frame.set_cursor_position(Position::new(
+                x.min(input_area.right().saturating_sub(2)),
+                input_area.y + 1,
+            ));
+            list_area
+        }
+        None => area,
+    };
+
+    let w = &mut app.wishlist;
+    let now = std::time::Instant::now();
+    let next = w.next_in(now).as_secs();
+    let block = Block::bordered()
+        .title(format!(
+            " Wishlist · one query every {} min · next in {}:{:02} ",
+            w.interval.as_secs() / 60,
+            next / 60,
+            next % 60
+        ))
+        .border_style(if w.adding.is_some() {
+            Style::new().dark_gray()
+        } else {
+            Style::new().cyan()
+        });
+    let inner = block.inner(list_area);
+    frame.render_widget(block, list_area);
+
+    if w.items.is_empty() {
+        frame.render_widget(
+            Paragraph::new(
+                "nothing wished for yet – press a to add a query, or w on a search's results",
+            )
+            .dark_gray(),
+            inner,
+        );
+        return;
+    }
+
+    let rows: Vec<TableRow> = w
+        .items
+        .iter_mut()
+        .map(|item| {
+            let new = if item.new > 0 {
+                Span::raw(format!("{} new", item.new)).green().bold()
+            } else {
+                Span::raw("")
+            };
+            let found = format!(
+                "{} files from {} users",
+                item.results.file_count(),
+                item.results.users
+            );
+            let last = match item.last_run {
+                None => "not run yet".to_owned(),
+                Some(t) => {
+                    let mins = now.duration_since(t).as_secs() / 60;
+                    if mins == 0 {
+                        "ran just now".to_owned()
+                    } else {
+                        format!("ran {mins} min ago")
+                    }
+                }
+            };
+            TableRow::new(vec![
+                Cell::from(item.query.clone()).bold(),
+                Cell::from(new),
+                Cell::from(found).dark_gray(),
+                Cell::from(last).dark_gray(),
+            ])
+        })
+        .collect();
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Fill(1),
+            Constraint::Length(10),
+            Constraint::Length(26),
+            Constraint::Length(16),
+        ],
+    )
+    .row_highlight_style(if w.adding.is_some() {
+        Style::new()
+    } else {
+        SELECTED
+    });
+    let mut state = TableState::new().with_selected(Some(w.selected));
+    frame.render_stateful_widget(table, inner, &mut state);
+}
+
 fn render_buddies(frame: &mut Frame, app: &mut App, area: Rect) {
     let list_area = match &app.buddies.adding {
         Some(input) => {
@@ -666,31 +817,37 @@ fn help_line(app: &App) -> &'static str {
             " Enter search · Esc/Alt-s results · Ctrl-u clear · Ctrl-c quit"
         }
         (Tab::Search, Focus::List) => {
-            " 10j/10k jump · j/k move · Enter open folder · h/l collapse/expand · d download · b browse user · A add buddy · f/F format filter · s search · Tab/Alt-1…6 tabs · q quit"
+            " 10j/10k jump · j/k move · Enter open folder · h/l collapse/expand · d download · w wishlist · b browse user · A add buddy · f/F format filter · s search · Tab/Alt-1…7 tabs · q quit"
         }
         (Tab::Transfers, _) => {
-            " j/k move · c cancel · r retry failed · x clear finished · A add buddy · s search · Tab/Alt-1…6 tabs · q quit"
+            " j/k move · c cancel · r retry failed · x clear finished · A add buddy · s search · Tab/Alt-1…7 tabs · q quit"
         }
         (Tab::Browse, _) if app.browse_focus == Focus::Input => {
             " Enter browse user · Esc list · Ctrl-u clear · Ctrl-c quit"
         }
         (Tab::Browse, _) => {
-            " j/k move · Enter open folder · d download · A add buddy · f/F format filter · / other user · Tab/Alt-1…6 tabs · q quit"
+            " j/k move · Enter open folder · d download · A add buddy · f/F format filter · / other user · Tab/Alt-1…7 tabs · q quit"
         }
         (Tab::Uploads, _) => {
-            " j/k move · c cancel · x clear finished · A add buddy · s search · Tab/Alt-1…6 tabs · q quit"
+            " j/k move · c cancel · x clear finished · A add buddy · s search · Tab/Alt-1…7 tabs · q quit"
         }
         (Tab::Settings, _) if app.settings.is_editing() => {
             " Tab complete folder · Enter save · Esc cancel · Ctrl-u clear"
         }
         (Tab::Settings, _) => {
-            " j/k move · Enter edit/toggle · a add shared folder · x remove · s search · Tab/Alt-1…6 tabs · q quit"
+            " j/k move · Enter edit/toggle · a add shared folder · x remove · s search · Tab/Alt-1…7 tabs · q quit"
         }
         (Tab::Buddies, _) if app.buddies.adding.is_some() => {
             " Enter add buddy · Esc cancel · Ctrl-u clear · Ctrl-c quit"
         }
         (Tab::Buddies, _) => {
-            " j/k move · a add buddy · x remove · Enter/b browse shares · s search · Tab/Alt-1…6 tabs · q quit"
+            " j/k move · a add buddy · x remove · Enter/b browse shares · s search · Tab/Alt-1…7 tabs · q quit"
+        }
+        (Tab::Wishlist, _) if app.wishlist.adding.is_some() => {
+            " Enter add to wishlist · Esc cancel · Ctrl-u clear · Ctrl-c quit"
+        }
+        (Tab::Wishlist, _) => {
+            " j/k move · Enter open results · a add · r run now · x remove · w on a search adds it · Tab/Alt-1…7 tabs · q quit"
         }
     }
 }

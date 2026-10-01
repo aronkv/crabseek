@@ -22,7 +22,7 @@
 │▸ Tomorrow's Harvest  (17)            FLAC 24/44.1 ~1914kbps  643.5 MB  bob   free 12.1 MB/s│
 │▸ Music Has the Right to Children (19) MP3 320kbps            151.2 MB  carol  queue 2      │
 └────────────────────────────────────────────────────────────────────────────────────────────┘
- 10j/10k jump · Enter open folder · d download · f/F format filter · s search · Tab/Alt-1…6 tabs
+ 10j/10k jump · Enter open folder · d download · w wishlist · f/F filter · Tab/Alt-1…7 tabs
 ```
 
 seekr speaks the Soulseek protocol natively. There is no daemon, web UI or Python runtime:
@@ -41,6 +41,9 @@ you type `seekr`, search, and download whole albums in a few keystrokes.
 - **Buddies:** keep a list of users and see live whether they are online, away or
   offline, with their share size and speed. `A` on any search result, download or
   upload adds that user; `Enter` on a buddy browses their shares.
+- **Wishlist:** saved searches keep running in the background, one every 12
+  minutes as the server allows, and the Wishlist tab counts files you have not seen
+  yet. `w` on a search's results adds it; `Enter` on a wish opens everything found.
 - **One-key downloads:** `d` on a file or a whole folder. Interrupted downloads resume
   from where they stopped (`.part` files), and name clashes never overwrite anything.
 - **Transfer view:** live progress, speed, queue position and failure reasons, with
@@ -141,7 +144,7 @@ Without this, you can still download from peers that are reachable themselves.
 |---|---|---|
 | everywhere | `s`, `/` | open the search box (seekr starts in the results list) |
 | | `Alt-s` | toggle between the search box and the results, also while typing |
-| | `Tab`, `Alt-1`–`6`, `F1`–`F6` | switch between Search, Downloads, Uploads, Settings, Browse and Buddies |
+| | `Tab`, `Alt-1`–`7`, `F1`–`F7` | switch between Search, Downloads, Uploads, Settings, Browse, Buddies and Wishlist |
 | | `A` | add the user of the selected result, download or upload as a buddy |
 | | `q`, `Ctrl-c` | quit (`q` asks again while transfers are running) |
 | lists | `10j`, `10k`, `10↑` … | vim-style counts: move 10 rows (the count shows bottom left) |
@@ -167,12 +170,16 @@ Without this, you can still download from peers that are reachable themselves.
 | buddies | `a` | type a username to add (`Enter` adds it) |
 | | `x` | remove the selected buddy |
 | | `Enter`, `b` | browse the buddy's shares |
+| wishlist | `a` | type a query to add (`Enter` adds it); `w` on search results does the same |
+| | `Enter` | open everything found for the wish on the Search tab |
+| | `r` | run the wish now (the next scheduled one waits a full interval) |
+| | `x` | remove the wish |
 
 ### Command line
 
 ```sh
 seekr                                   # the TUI
-seekr search "artist album" --full-paths
+seekr search "artist album" --full-paths [--wishlist]
 seekr download <user> '<remote\path\to\file.flac>'
 seekr userinfo <user>                   # test a peer connection
 seekr browse <user>                     # list a user's shared folders
@@ -204,6 +211,7 @@ server = "server.slsknet.org:2242"      # default
 | `~/.config/seekr/config.toml` | login and settings |
 | `~/.local/share/seekr/downloads.json` | the download list |
 | `~/.local/share/seekr/buddies.json` | the buddy list |
+| `~/.local/share/seekr/wishlist.json` | wishlist queries |
 | `~/.cache/seekr/shares.json` | cached audio properties of shared files |
 | `~/.local/state/seekr/seekr.log` | log of the last TUI session (`RUST_LOG=debug` for more) |
 
@@ -228,7 +236,8 @@ server = "server.slsknet.org:2242"      # default
 - [x] Sharing your music library and serving uploads
 - [x] Distributed search network (as a child node; relaying searches to children is next)
 - [x] Browsing a user's shares
-- [ ] Private messages, wishlist
+- [x] Wishlist
+- [ ] Private messages
 - [x] Automatic port mapping (UPnP)
 - [ ] AUR package
 

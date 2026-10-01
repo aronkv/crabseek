@@ -14,6 +14,7 @@ use super::results::Results;
 use super::settings::{Settings, SettingsAction};
 use super::transfers::Transfers;
 use super::uploads::Uploads;
+use super::wishlist::Wishlist;
 use crate::config::{self, Config};
 use crate::persist::{self, SavedDownload, SavedStatus};
 
@@ -25,17 +26,19 @@ pub enum Tab {
     Settings,
     Browse,
     Buddies,
+    Wishlist,
 }
 
 impl Tab {
     /// Tab-bar order; the numbers (`Alt-1`…`Alt-6`) follow it.
-    const ORDER: [Tab; 6] = [
+    const ORDER: [Tab; 7] = [
         Tab::Search,
         Tab::Transfers,
         Tab::Uploads,
         Tab::Settings,
         Tab::Browse,
         Tab::Buddies,
+        Tab::Wishlist,
     ];
 
     pub fn index(self) -> usize {
@@ -117,6 +120,8 @@ pub struct App {
     downloads_path: Option<PathBuf>,
     /// Where the buddy list is saved; `None` in tests.
     buddies_path: Option<PathBuf>,
+    pub wishlist: Wishlist,
+    wishlist_path: Option<PathBuf>,
     confirm_quit: bool,
     /// Vim-style count typed before a motion (`10k`).
     pub count: Option<usize>,
@@ -174,6 +179,8 @@ impl App {
             count: None,
             downloads_path,
             buddies_path: None,
+            wishlist: Wishlist::default(),
+            wishlist_path: None,
         };
         app.restore(saved);
         Ok(app)
@@ -217,6 +224,69 @@ impl App {
         if requeued > 0 {
             self.status = format!("resuming {requeued} unfinished downloads from last time");
         }
+    }
+
+    /// Puts the saved wishlist queries in place.
+    pub fn with_wishlist(mut self, queries: Vec<String>, path: Option<PathBuf>) -> Self {
+        self.wishlist = Wishlist::new(queries);
+        self.wishlist_path = path;
+        self
+    }
+
+    fn save_wishlist(&self, done: String) -> String {
+        let Some(path) = &self.wishlist_path else {
+            return done;
+        };
+        match persist::save_wishlist(path, &self.wishlist.queries()) {
+            Ok(()) => done,
+            Err(e) => format!("could not save the wishlist: {e:#}"),
+        }
+    }
+
+    fn add_wish(&mut self, query: &str) {
+        self.status = if self.wishlist.add(query) {
+            self.save_wishlist(format!("added {:?} to the wishlist", query.trim()))
+        } else {
+            format!("{:?} is already on the wishlist", query.trim())
+        };
+    }
+
+    /// Runs wishlist query `index` now and restarts the interval.
+    fn run_wish(&mut self, index: usize) {
+        let query = self.wishlist.items[index].query.clone();
+        match self.client.wishlist_search(&query) {
+            Ok(token) => {
+                if let Some(old) = self.wishlist.mark_run(index, token, Instant::now()) {
+                    let _ = self.client.stop_search(old);
+                }
+            }
+            Err(e) => self.status = e.to_string(),
+        }
+    }
+
+    /// Called on every tick: runs the wishlist query whose turn it is.
+    pub fn tick(&mut self) {
+        if let Some(index) = self.wishlist.due(Instant::now()) {
+            self.run_wish(index);
+        }
+    }
+
+    /// Opens a wishlist item's collected results on the Search tab.
+    fn open_wish(&mut self) {
+        let Some(item) = self.wishlist.items.get_mut(self.wishlist.selected) else {
+            return;
+        };
+        item.new = 0;
+        self.results = item.results.clone();
+        self.results_offset = 0;
+        self.search = Some(ActiveSearch {
+            token: item.latest_token().unwrap_or(0),
+            query: format!("wishlist: {}", item.query),
+            started: item.last_run.unwrap_or_else(Instant::now),
+        });
+        self.input = item.query.clone();
+        self.tab = Tab::Search;
+        self.focus = Focus::List;
     }
 
     /// Puts the saved buddies on the list and starts watching them.
@@ -281,7 +351,7 @@ impl App {
             Tab::Browse => self.browse.as_ref().map(|b| b.username.clone()),
             Tab::Transfers => self.transfers.selected().map(|t| t.username.clone()),
             Tab::Uploads => self.uploads.selected().map(|u| u.username.clone()),
-            Tab::Settings | Tab::Buddies => None,
+            Tab::Settings | Tab::Buddies | Tab::Wishlist => None,
         }
     }
 
@@ -302,8 +372,16 @@ impl App {
         match event {
             Event::SearchResult(resp) => {
                 if self.search.as_ref().is_some_and(|s| s.token == resp.token) {
-                    self.results.add(resp);
+                    self.results.add(resp.clone());
                 }
+                if let Some((query, new)) = self.wishlist.on_result(resp)
+                    && new > 0
+                {
+                    self.status = format!("wishlist: {new} new files for {query:?}");
+                }
+            }
+            Event::ServerMessage(ServerResponse::WishlistInterval(secs)) => {
+                self.wishlist.set_interval(secs)
             }
             Event::BrowseResult { username, list } => {
                 if let Some(b) = &mut self.browse
@@ -422,6 +500,10 @@ impl App {
             self.on_buddy_input_key(key);
             return;
         }
+        if self.tab == Tab::Wishlist && self.wishlist.adding.is_some() {
+            self.on_wish_input_key(key);
+            return;
+        }
 
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         // Digits build a count for the next motion, like in vim.
@@ -446,6 +528,7 @@ impl App {
             KeyCode::Char('4') | KeyCode::F(4) => self.tab = Tab::Settings,
             KeyCode::Char('5') | KeyCode::F(5) => self.tab = Tab::Browse,
             KeyCode::Char('6') | KeyCode::F(6) => self.tab = Tab::Buddies,
+            KeyCode::Char('7') | KeyCode::F(7) => self.tab = Tab::Wishlist,
             // `A` adds the user of the selected row as a buddy.
             KeyCode::Char('A') => {
                 if let Some(user) = self.selected_user() {
@@ -462,6 +545,7 @@ impl App {
                 Tab::Transfers => self.on_transfers_key(key, count),
                 Tab::Uploads => self.on_uploads_key(key, count),
                 Tab::Buddies => self.on_buddies_key(key, count),
+                Tab::Wishlist => self.on_wishlist_key(key, count),
                 Tab::Settings => {
                     // Settings moves one row per key; repeat for a count.
                     let times = if matches!(
@@ -480,6 +564,59 @@ impl App {
         }
         if self.tab == Tab::Buddies && tab_before != Tab::Buddies {
             self.refresh_buddy_stats();
+        }
+    }
+
+    fn on_wishlist_key(&mut self, key: KeyEvent, count: Option<usize>) {
+        let n = count.unwrap_or(1) as isize;
+        let w = &mut self.wishlist;
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => w.move_by(n),
+            KeyCode::Up | KeyCode::Char('k') => w.move_by(-n),
+            KeyCode::Home | KeyCode::Char('g') => w.selected = 0,
+            KeyCode::End | KeyCode::Char('G') => match count {
+                Some(line) => w.selected = (line - 1).min(w.items.len().saturating_sub(1)),
+                None => w.move_by(isize::MAX),
+            },
+            KeyCode::Char('a') => w.adding = Some(String::new()),
+            KeyCode::Enter => self.open_wish(),
+            KeyCode::Char('r') => {
+                if self.wishlist.selected < self.wishlist.items.len() {
+                    self.run_wish(self.wishlist.selected);
+                    self.status =
+                        "searching now; the next scheduled run waits a full interval".into();
+                }
+            }
+            KeyCode::Char('x') | KeyCode::Delete => {
+                if let Some((query, tokens)) = self.wishlist.remove_selected() {
+                    for token in tokens {
+                        let _ = self.client.stop_search(token);
+                    }
+                    self.status =
+                        self.save_wishlist(format!("removed {query:?} from the wishlist"));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn on_wish_input_key(&mut self, key: KeyEvent) {
+        let Some(text) = &mut self.wishlist.adding else {
+            return;
+        };
+        match key.code {
+            KeyCode::Enter => {
+                let query = std::mem::take(text);
+                self.wishlist.adding = None;
+                self.add_wish(&query);
+            }
+            KeyCode::Esc => self.wishlist.adding = None,
+            KeyCode::Backspace => {
+                text.pop();
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => text.clear(),
+            KeyCode::Char(c) => text.push(c),
+            _ => {}
         }
     }
 
@@ -700,6 +837,18 @@ impl App {
             if let Some((user, _)) = self.results_mut(which).selection_files().first() {
                 let user = user.clone();
                 self.start_browse(user);
+            }
+            return;
+        }
+        if key.code == KeyCode::Char('w') && which == Which::Search {
+            // Keep looking for the current search in the background.
+            if let Some(search) = &self.search {
+                let query = search
+                    .query
+                    .strip_prefix("wishlist: ")
+                    .unwrap_or(&search.query)
+                    .to_owned();
+                self.add_wish(&query);
             }
             return;
         }

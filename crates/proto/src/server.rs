@@ -32,6 +32,8 @@ mod code {
     pub const EMBEDDED_MESSAGE: u32 = 93;
     pub const ACCEPT_CHILDREN: u32 = 100;
     pub const POSSIBLE_PARENTS: u32 = 102;
+    pub const WISHLIST_SEARCH: u32 = 103;
+    pub const WISHLIST_INTERVAL: u32 = 104;
     pub const BRANCH_LEVEL: u32 = 126;
     pub const BRANCH_ROOT: u32 = 127;
     pub const RESET_DISTRIBUTED: u32 = 130;
@@ -103,6 +105,12 @@ pub enum ServerRequest {
     BranchLevel(u32),
     /// The root of our distributed branch.
     BranchRoot(String),
+    /// One wishlist query; at most one per `WishlistInterval`. Results come
+    /// back like any search, with this token.
+    WishlistSearch {
+        token: u32,
+        query: String,
+    },
 }
 
 impl ServerRequest {
@@ -201,6 +209,11 @@ impl ServerRequest {
                 b.put_u32_le(code::BRANCH_ROOT);
                 b.put_string_wire(root);
             }
+            Self::WishlistSearch { token, query } => {
+                b.put_u32_le(code::WISHLIST_SEARCH);
+                b.put_u32_le(*token);
+                b.put_string_wire(query);
+            }
         });
     }
 }
@@ -270,6 +283,8 @@ pub enum ServerResponse {
     },
     /// Drop our distributed parent and children.
     ResetDistributed,
+    /// How often we may send a `WishlistSearch`, in seconds.
+    WishlistInterval(u32),
     /// Anything not implemented yet; kept so callers can log it.
     Unknown {
         code: u32,
@@ -424,6 +439,7 @@ impl ServerResponse {
                 payload: payload.slice(5..),
             },
             code::RESET_DISTRIBUTED => Self::ResetDistributed,
+            code::WISHLIST_INTERVAL => Self::WishlistInterval(r.u32()?),
             code::FILE_SEARCH => Self::FileSearch {
                 username: r.string()?,
                 token: r.u32()?,
@@ -680,6 +696,30 @@ mod tests {
                 code: 3,
                 payload: Bytes::from_static(&[9, 9]),
             })
+        );
+    }
+
+    #[test]
+    fn wishlist_messages() {
+        let mut buf = BytesMut::new();
+        ServerRequest::WishlistSearch {
+            token: 5,
+            query: "ab".into(),
+        }
+        .encode(&mut buf);
+        assert_eq!(
+            &buf[..],
+            &[
+                14, 0, 0, 0, 103, 0, 0, 0, 5, 0, 0, 0, 2, 0, 0, 0, b'a', b'b'
+            ]
+        );
+        let p = payload(|b| {
+            b.put_u32_le(104);
+            b.put_u32_le(720);
+        });
+        assert_eq!(
+            ServerResponse::decode(p),
+            Ok(ServerResponse::WishlistInterval(720))
         );
     }
 

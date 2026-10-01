@@ -8,6 +8,7 @@ mod settings;
 mod transfers;
 mod ui;
 mod uploads;
+mod wishlist;
 
 use std::time::Duration;
 
@@ -106,7 +107,11 @@ async fn login_then_run(
                         saved,
                         Some(downloads_path),
                     )?
-                    .with_buddies(buddies, Some(buddies_path));
+                    .with_buddies(buddies, Some(buddies_path))
+                    .with_wishlist(
+                        crate::persist::load_wishlist(&config::wishlist_path()?),
+                        Some(config::wishlist_path()?),
+                    );
                     return event_loop(terminal, &mut input, app, events).await;
                 }
                 Err(e) => {
@@ -181,7 +186,10 @@ async fn event_loop(
                 }
                 None => client_alive = false,
             },
-            _ = tick.tick() => app.persist(),
+            _ = tick.tick() => {
+                app.tick();
+                app.persist();
+            }
         }
     }
     app.persist();
@@ -599,6 +607,36 @@ mod tests {
         });
         assert_eq!(app.browse_results.filter(), FormatFilter::Flac);
         assert!(draw(&mut app).contains("nothing in this format"));
+    }
+
+    #[test]
+    fn wishlist_from_search_and_tab() {
+        use crossterm::event::KeyModifiers;
+        let mut app = app_with_results();
+        // `w` on the results keeps the search on the wishlist.
+        app.on_key(KeyEvent::from(KeyCode::Char('w')));
+        assert_eq!(app.status, "added \"boards of canada\" to the wishlist");
+        app.on_key(KeyEvent::from(KeyCode::Char('w')));
+        assert!(app.status.contains("already on the wishlist"));
+
+        app.on_key(KeyEvent::new(KeyCode::Char('7'), KeyModifiers::ALT));
+        assert_eq!(app.tab, Tab::Wishlist);
+        app.on_key(KeyEvent::from(KeyCode::Char('a')));
+        for c in "aphex twin".chars() {
+            app.on_key(KeyEvent::from(KeyCode::Char(c)));
+        }
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(app.wishlist.queries(), ["boards of canada", "aphex twin"]);
+
+        let screen = draw(&mut app);
+        println!("{screen}");
+        assert!(screen.contains("7 Wishlist"));
+        assert!(screen.contains("aphex twin"));
+        assert!(screen.contains("not run yet"));
+
+        app.on_key(KeyEvent::from(KeyCode::Char('j')));
+        app.on_key(KeyEvent::from(KeyCode::Char('x')));
+        assert_eq!(app.wishlist.queries(), ["boards of canada"]);
     }
 
     #[test]

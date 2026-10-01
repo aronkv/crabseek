@@ -290,6 +290,20 @@ impl Client {
         self.send_peer(username, PeerMsg::SharedFileListRequest)
     }
 
+    /// Runs one wishlist query. Results arrive as [`Event::SearchResult`]
+    /// with the returned token, like a normal search. The server allows
+    /// one wishlist query per `WishlistInterval`; pacing is the caller's.
+    pub fn wishlist_search(&self, query: impl Into<String>) -> Result<u32, ShutDown> {
+        let token = self.tokens.next();
+        self.tx
+            .send(Internal::WishlistSearch {
+                token,
+                query: query.into(),
+            })
+            .map_err(|_| ShutDown)?;
+        Ok(token)
+    }
+
     /// Ignores further results for this search.
     pub fn stop_search(&self, token: u32) -> Result<(), ShutDown> {
         self.tx
@@ -423,6 +437,10 @@ pub(crate) enum Internal {
     },
     StopSearch {
         token: u32,
+    },
+    WishlistSearch {
+        token: u32,
+        query: String,
     },
     Download {
         id: DownloadId,
@@ -586,6 +604,11 @@ impl Actor {
                 Internal::Search { token, query } => {
                     self.searches.insert(token);
                     self.send_server(ServerRequest::FileSearch { token, query })
+                        .await;
+                }
+                Internal::WishlistSearch { token, query } => {
+                    self.searches.insert(token);
+                    self.send_server(ServerRequest::WishlistSearch { token, query })
                         .await;
                 }
                 Internal::StopSearch { token } => {

@@ -10,6 +10,7 @@ use crate::search::{format_kbps, is_lossy, kbps};
 
 pub type FolderId = usize;
 
+#[derive(Clone)]
 pub struct Folder {
     pub username: String,
     pub path: String,
@@ -193,7 +194,7 @@ pub enum Row {
     File(FolderId, usize),
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Results {
     /// Indexed by `FolderId`; never reordered.
     folders: Vec<Folder>,

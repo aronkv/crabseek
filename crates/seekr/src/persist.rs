@@ -59,21 +59,39 @@ pub fn save(path: &Path, list: &[SavedDownload]) -> anyhow::Result<()> {
 
 /// Saved buddy names; empty if there are none or the file is unreadable.
 pub fn load_buddies(path: &Path) -> Vec<String> {
+    load_strings(path, "buddies")
+}
+
+pub fn save_buddies(path: &Path, names: &[String]) -> anyhow::Result<()> {
+    save_strings(path, names)
+}
+
+/// Saved wishlist queries; empty if there are none or the file is
+/// unreadable.
+pub fn load_wishlist(path: &Path) -> Vec<String> {
+    load_strings(path, "wishlist")
+}
+
+pub fn save_wishlist(path: &Path, queries: &[String]) -> anyhow::Result<()> {
+    save_strings(path, queries)
+}
+
+fn load_strings(path: &Path, what: &str) -> Vec<String> {
     match std::fs::read_to_string(path) {
         Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
-            tracing::warn!(%e, "saved buddies are corrupt");
+            tracing::warn!(%e, "saved {what} are corrupt");
             Vec::new()
         }),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
         Err(e) => {
-            tracing::warn!(%e, "could not read the saved buddies");
+            tracing::warn!(%e, "could not read the saved {what}");
             Vec::new()
         }
     }
 }
 
-pub fn save_buddies(path: &Path, names: &[String]) -> anyhow::Result<()> {
-    config::write_private(path, &serde_json::to_string_pretty(names)?)
+fn save_strings(path: &Path, list: &[String]) -> anyhow::Result<()> {
+    config::write_private(path, &serde_json::to_string_pretty(list)?)
 }
 
 #[cfg(test)]
