@@ -25,11 +25,6 @@
  10j/10k jump · Enter open folder · d download · w wishlist · f/F filter · Tab/Alt-1…7 tabs
 ```
 
-> **Formerly seekr.** The AUR name `seekr` belongs to an unrelated project, so this
-> one is now crabseek (Ferris the crab + seek). On its first run, crabseek moves your
-> old `seekr` login, settings and history over by itself; downloads stay where they
-> are.
-
 crabseek speaks the Soulseek protocol natively. There is no daemon, web UI or Python runtime:
 you type `crabseek`, search, and download whole albums in a few keystrokes.
 
