@@ -23,6 +23,8 @@ mod code {
     pub const UNWATCH_USER: u32 = 6;
     pub const GET_USER_STATUS: u32 = 7;
     pub const CONNECT_TO_PEER: u32 = 18;
+    pub const MESSAGE_USER: u32 = 22;
+    pub const MESSAGE_ACKED: u32 = 23;
     pub const FILE_SEARCH: u32 = 26;
     pub const SET_STATUS: u32 = 28;
     pub const SERVER_PING: u32 = 32;
@@ -105,6 +107,14 @@ pub enum ServerRequest {
     BranchLevel(u32),
     /// The root of our distributed branch.
     BranchRoot(String),
+    /// A private message to `username`.
+    MessageUser {
+        username: String,
+        message: String,
+    },
+    /// Confirms we got private message `id`; until then the server keeps
+    /// sending it.
+    MessageAcked(u32),
     /// One wishlist query; at most one per `WishlistInterval`. Results come
     /// back like any search, with this token.
     WishlistSearch {
@@ -209,6 +219,15 @@ impl ServerRequest {
                 b.put_u32_le(code::BRANCH_ROOT);
                 b.put_string_wire(root);
             }
+            Self::MessageUser { username, message } => {
+                b.put_u32_le(code::MESSAGE_USER);
+                b.put_string_wire(username);
+                b.put_string_wire(message);
+            }
+            Self::MessageAcked(id) => {
+                b.put_u32_le(code::MESSAGE_ACKED);
+                b.put_u32_le(*id);
+            }
             Self::WishlistSearch { token, query } => {
                 b.put_u32_le(code::WISHLIST_SEARCH);
                 b.put_u32_le(*token);
@@ -285,6 +304,17 @@ pub enum ServerResponse {
     ResetDistributed,
     /// How often we may send a `WishlistSearch`, in seconds.
     WishlistInterval(u32),
+    /// A private message for us. Must be acknowledged with `MessageAcked`.
+    MessageUser {
+        id: u32,
+        /// Unix seconds, when it was sent.
+        timestamp: u32,
+        username: String,
+        message: String,
+        /// False when the server re-sends an older, unacknowledged one
+        /// (for example after we were offline).
+        new: bool,
+    },
     /// Anything not implemented yet; kept so callers can log it.
     Unknown {
         code: u32,
@@ -440,6 +470,16 @@ impl ServerResponse {
             },
             code::RESET_DISTRIBUTED => Self::ResetDistributed,
             code::WISHLIST_INTERVAL => Self::WishlistInterval(r.u32()?),
+            code::MESSAGE_USER => Self::MessageUser {
+                id: r.u32()?,
+                timestamp: r.u32()?,
+                username: r.string()?,
+                message: r.string()?,
+                new: (!r.is_empty())
+                    .then(|| r.bool())
+                    .transpose()?
+                    .unwrap_or(true),
+            },
             code::FILE_SEARCH => Self::FileSearch {
                 username: r.string()?,
                 token: r.u32()?,
@@ -695,6 +735,44 @@ mod tests {
             Ok(ServerResponse::EmbeddedMessage {
                 code: 3,
                 payload: Bytes::from_static(&[9, 9]),
+            })
+        );
+    }
+
+    #[test]
+    fn private_messages() {
+        let mut buf = BytesMut::new();
+        ServerRequest::MessageUser {
+            username: "al".into(),
+            message: "hi".into(),
+        }
+        .encode(&mut buf);
+        assert_eq!(
+            &buf[..],
+            &[
+                16, 0, 0, 0, 22, 0, 0, 0, 2, 0, 0, 0, b'a', b'l', 2, 0, 0, 0, b'h', b'i'
+            ]
+        );
+        let mut buf = BytesMut::new();
+        ServerRequest::MessageAcked(9).encode(&mut buf);
+        assert_eq!(&buf[..], &[8, 0, 0, 0, 23, 0, 0, 0, 9, 0, 0, 0]);
+
+        let p = payload(|b| {
+            b.put_u32_le(22);
+            b.put_u32_le(9);
+            b.put_u32_le(1_759_300_000);
+            b.put_string_wire("bob");
+            b.put_string_wire("szia!");
+            b.put_bool_wire(false);
+        });
+        assert_eq!(
+            ServerResponse::decode(p),
+            Ok(ServerResponse::MessageUser {
+                id: 9,
+                timestamp: 1_759_300_000,
+                username: "bob".into(),
+                message: "szia!".into(),
+                new: false,
             })
         );
     }

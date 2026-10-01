@@ -11,10 +11,12 @@ use seekr_proto::server::OnlineStatus;
 
 use super::app::{App, Focus, SharesStatus, Tab};
 use super::buddies::Known;
+use super::chat::ChatInput;
 use super::results::{FormatFilter, Results, Row};
 use super::settings::Item;
 use crate::config::{self, display_path};
 use crate::search::{human_size, quality};
+use unicode_width::UnicodeWidthStr;
 
 const SELECTED: Style = Style::new().add_modifier(Modifier::REVERSED);
 
@@ -36,6 +38,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Tab::Settings => render_settings(frame, app, body),
         Tab::Buddies => render_buddies(frame, app, body),
         Tab::Wishlist => render_wishlist(frame, app, body),
+        Tab::Chat => render_chat(frame, app, body),
     }
     frame.render_widget(
         Paragraph::new(app.status.as_str()).fg(Color::Yellow),
@@ -74,6 +77,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
             0 => "7 Wishlist".to_owned(),
             n => format!("7 Wishlist ({n} new)"),
         }),
+        counted("8 Chat", app.chats.total_unread()),
     ];
     let selected = app.tab.index();
     let tabs_width: u16 = titles.iter().map(|t| t.width() as u16 + 2).sum();
@@ -616,6 +620,144 @@ fn render_uploads(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_stateful_widget(table, inner, &mut state);
 }
 
+/// Hard-wraps `text` to `width` columns (wide characters count double).
+fn wrap(text: &str, width: usize) -> Vec<String> {
+    use unicode_width::UnicodeWidthChar;
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    for paragraph in text.split('\n') {
+        let mut line = String::new();
+        let mut used = 0;
+        for ch in paragraph.chars() {
+            let w = ch.width().unwrap_or(0);
+            if used + w > width && !line.is_empty() {
+                lines.push(std::mem::take(&mut line));
+                used = 0;
+            }
+            line.push(ch);
+            used += w;
+        }
+        lines.push(line);
+    }
+    lines
+}
+
+fn render_chat(frame: &mut Frame, app: &mut App, area: Rect) {
+    let [list_area, conv_area] =
+        Layout::horizontal([Constraint::Length(26), Constraint::Min(20)]).areas(area);
+    let chats = &app.chats;
+
+    // Conversations.
+    let list_block =
+        Block::bordered()
+            .title(" Conversations ")
+            .border_style(if chats.input.is_none() {
+                Style::new().cyan()
+            } else {
+                Style::new().dark_gray()
+            });
+    let list_inner = list_block.inner(list_area);
+    frame.render_widget(list_block, list_area);
+    let rows: Vec<TableRow> = chats
+        .list
+        .iter()
+        .map(|c| {
+            let name = Cell::from(c.username.clone());
+            if c.unread > 0 {
+                TableRow::new(vec![name.bold(), Cell::from(c.unread.to_string()).green()])
+            } else {
+                TableRow::new(vec![name, Cell::from("")])
+            }
+        })
+        .collect();
+    let table = Table::new(rows, [Constraint::Fill(1), Constraint::Length(4)])
+        .row_highlight_style(SELECTED);
+    let mut state =
+        TableState::new().with_selected((!chats.list.is_empty()).then_some(chats.selected));
+    frame.render_stateful_widget(table, list_inner, &mut state);
+
+    // The selected conversation and the input box.
+    let [messages_area, input_area] =
+        Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).areas(conv_area);
+    let title = match chats.selected() {
+        Some(c) => format!(" {} ", c.username),
+        None => " Private messages ".to_owned(),
+    };
+    let block = Block::bordered()
+        .title(title)
+        .border_style(Style::new().dark_gray());
+    let inner = block.inner(messages_area);
+    frame.render_widget(block, messages_area);
+
+    match chats.selected() {
+        None => {
+            frame.render_widget(
+                Paragraph::new(
+                    "Private messages with other Soulseek users. Press a and type a username to \
+                     start a conversation, or m on a search result, download, upload or buddy. \
+                     Messages that arrive while you are offline are delivered when you log in. \
+                     ? explains more.",
+                )
+                .dark_gray()
+                .wrap(Wrap { trim: true }),
+                inner,
+            );
+        }
+        Some(conv) => {
+            let mut lines: Vec<Line> = Vec::new();
+            for m in &conv.messages {
+                let who = if m.from_me {
+                    app.username.as_str()
+                } else {
+                    conv.username.as_str()
+                };
+                let prefix = format!("{} {who}: ", super::chat::format_time(m.timestamp));
+                let indent = " ".repeat(prefix.chars().count().min(inner.width as usize / 2));
+                let body_width = (inner.width as usize).saturating_sub(indent.len());
+                for (i, part) in wrap(&m.text, body_width).into_iter().enumerate() {
+                    let lead = if i == 0 {
+                        let style = if m.from_me {
+                            Style::new().dark_gray()
+                        } else {
+                            Style::new().cyan()
+                        };
+                        Span::styled(prefix.clone(), style)
+                    } else {
+                        Span::raw(indent.clone())
+                    };
+                    lines.push(Line::from(vec![lead, Span::raw(part)]));
+                }
+            }
+            // Newest at the bottom.
+            let skip = lines.len().saturating_sub(inner.height as usize);
+            frame.render_widget(Paragraph::new(lines.split_off(skip)), inner);
+        }
+    }
+
+    let (label, text) = match &chats.input {
+        Some(ChatInput::Message(t)) => (" Message ", t.as_str()),
+        Some(ChatInput::NewUser(t)) => (" Write to user ", t.as_str()),
+        None => (" Enter or i to write ", ""),
+    };
+    frame.render_widget(
+        Paragraph::new(text).block(Block::bordered().title(label).border_style(
+            if chats.input.is_some() {
+                Style::new().cyan()
+            } else {
+                Style::new().dark_gray()
+            },
+        )),
+        input_area,
+    );
+    if chats.input.is_some() {
+        let x = input_area.x + 1 + UnicodeWidthStr::width(text) as u16;
+        frame.set_cursor_position(Position::new(
+            x.min(input_area.right().saturating_sub(2)),
+            input_area.y + 1,
+        ));
+    }
+}
+
 fn render_wishlist(frame: &mut Frame, app: &mut App, area: Rect) {
     let list_area = match &app.wishlist.adding {
         Some(input) => {
@@ -841,37 +983,46 @@ fn help_line(app: &App) -> &'static str {
             " Enter search · Esc/Alt-s results · Ctrl-u clear · Ctrl-c quit"
         }
         (Tab::Search, Focus::List) => {
-            " 10j/10k jump · j/k move · Enter open folder · h/l collapse/expand · d download · w wishlist · b browse user · A add buddy · f/F format filter · s search · Tab/Alt-1…7 tabs · q quit"
+            " 10j/10k jump · j/k move · Enter open folder · h/l collapse/expand · d download · w wishlist · b browse user · A add buddy · f/F format filter · s search · Tab/Alt-1…8 tabs · q quit"
         }
         (Tab::Transfers, _) => {
-            " j/k move · c cancel · r retry failed · x clear finished · A add buddy · s search · Tab/Alt-1…7 tabs · q quit"
+            " j/k move · c cancel · r retry failed · x clear finished · A add buddy · s search · Tab/Alt-1…8 tabs · q quit"
         }
         (Tab::Browse, _) if app.browse_focus == Focus::Input => {
             " Enter browse user · Esc list · Ctrl-u clear · Ctrl-c quit"
         }
         (Tab::Browse, _) => {
-            " j/k move · Enter open folder · d download · A add buddy · f/F format filter · / other user · Tab/Alt-1…7 tabs · q quit"
+            " j/k move · Enter open folder · d download · A add buddy · f/F format filter · / other user · Tab/Alt-1…8 tabs · q quit"
         }
         (Tab::Uploads, _) => {
-            " j/k move · c cancel · x clear finished · A add buddy · s search · Tab/Alt-1…7 tabs · q quit"
+            " j/k move · c cancel · x clear finished · A add buddy · s search · Tab/Alt-1…8 tabs · q quit"
         }
         (Tab::Settings, _) if app.settings.is_editing() => {
             " Tab complete folder · Enter save · Esc cancel · Ctrl-u clear"
         }
         (Tab::Settings, _) => {
-            " j/k move · Enter edit/toggle · a add shared folder · x remove · s search · Tab/Alt-1…7 tabs · q quit"
+            " j/k move · Enter edit/toggle · a add shared folder · x remove · s search · Tab/Alt-1…8 tabs · q quit"
         }
         (Tab::Buddies, _) if app.buddies.adding.is_some() => {
             " Enter add buddy · Esc cancel · Ctrl-u clear · Ctrl-c quit"
         }
         (Tab::Buddies, _) => {
-            " j/k move · a add buddy · x remove · Enter/b browse shares · s search · Tab/Alt-1…7 tabs · q quit"
+            " j/k move · a add buddy · x remove · Enter/b browse shares · s search · Tab/Alt-1…8 tabs · q quit"
+        }
+        (Tab::Chat, _) if matches!(app.chats.input, Some(ChatInput::NewUser(_))) => {
+            " Enter open conversation · Esc cancel · Ctrl-u clear · Ctrl-c quit"
+        }
+        (Tab::Chat, _) if app.chats.input.is_some() => {
+            " Enter send · Esc stop typing · Ctrl-u clear · Ctrl-c quit"
+        }
+        (Tab::Chat, _) => {
+            " j/k conversation · Enter/i write · a new conversation · b browse · x delete · m on other tabs · Tab/Alt-1…8 tabs · q quit"
         }
         (Tab::Wishlist, _) if app.wishlist.adding.is_some() => {
             " Enter add to wishlist · Esc cancel · Ctrl-u clear · Ctrl-c quit"
         }
         (Tab::Wishlist, _) => {
-            " j/k move · Enter open results · a add · r run now · x remove · w on a search adds it · Tab/Alt-1…7 tabs · q quit"
+            " j/k move · Enter open results · a add · r run now · x remove · w on a search adds it · Tab/Alt-1…8 tabs · q quit"
         }
     }
 }
@@ -1059,6 +1210,15 @@ fn last_components(path: &str, n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wraps_by_display_width() {
+        assert_eq!(wrap("abcdef", 4), ["abcd", "ef"]);
+        assert_eq!(wrap("a\nb", 4), ["a", "b"]);
+        // Wide characters take two columns.
+        assert_eq!(wrap("日本語", 4), ["日本", "語"]);
+        assert_eq!(wrap("", 4), [""]);
+    }
 
     #[test]
     fn scroll_window() {

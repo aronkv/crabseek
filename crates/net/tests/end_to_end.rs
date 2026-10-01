@@ -44,6 +44,8 @@ struct Opts {
     /// Send searches to everyone else as EmbeddedMessage, as if they were
     /// branch roots.
     embed_searches: bool,
+    /// Report every MessageAcked id here.
+    acks: Option<mpsc::UnboundedSender<u32>>,
 }
 
 fn frame(code: u32, body: impl FnOnce(&mut BytesMut)) -> Vec<u8> {
@@ -261,6 +263,26 @@ async fn serve(stream: TcpStream, sessions: Sessions, watchers: Watchers, opts: 
                             }));
                         }
                     }
+                }
+            }
+            // MessageUser: deliver it with an id the recipient must ack.
+            22 => {
+                let target = r.string().unwrap();
+                let message = r.string().unwrap();
+                if let Some(session) = sessions.lock().unwrap().get(&target) {
+                    let _ = session.tx.send(frame(22, |b| {
+                        b.put_u32_le(4242);
+                        b.put_u32_le(1_759_300_000);
+                        b.put_string_wire(&me);
+                        b.put_string_wire(&message);
+                        b.put_bool_wire(true);
+                    }));
+                }
+            }
+            // MessageAcked
+            23 => {
+                if let Some(acks) = &opts.acks {
+                    let _ = acks.send(r.u32().unwrap());
                 }
             }
             // HaveNoParent(true): offer the fake parent.
@@ -719,5 +741,41 @@ async fn wishlist_search_finds_results() {
     })
     .await;
     assert_eq!(files, 1);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[tokio::test]
+async fn private_message_is_delivered_and_acked() {
+    let root = temp_dir("pm");
+    let (ack_tx, mut ack_rx) = mpsc::unbounded_channel();
+    let server = fake_server_with(Opts {
+        acks: Some(ack_tx),
+        ..Opts::default()
+    })
+    .await;
+    let (alice, _alice_events) = start(&server, "alice", &root.join("a"), vec![]).await;
+    let (_bob, mut bob_events) = start(&server, "bob", &root.join("b"), vec![]).await;
+
+    alice
+        .message_user("bob", "szia, megvan még a Geogaddi?")
+        .unwrap();
+    let (from, text, timestamp) = wait_for(&mut bob_events, |e| match e {
+        Event::PrivateMessage {
+            username,
+            message,
+            timestamp,
+            ..
+        } => Some((username, message, timestamp)),
+        _ => None,
+    })
+    .await;
+    assert_eq!(from, "alice");
+    assert_eq!(text, "szia, megvan még a Geogaddi?");
+    assert_eq!(timestamp, 1_759_300_000);
+    // Bob acknowledged it, so the server stops re-sending.
+    let ack = tokio::time::timeout(Duration::from_secs(5), ack_rx.recv())
+        .await
+        .unwrap();
+    assert_eq!(ack, Some(4242));
     std::fs::remove_dir_all(root).unwrap();
 }

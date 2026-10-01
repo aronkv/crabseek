@@ -41,6 +41,10 @@ you type `seekr`, search, and download whole albums in a few keystrokes.
 - **Buddies:** keep a list of users and see live whether they are online, away or
   offline, with their share size and speed. `A` on any search result, download or
   upload adds that user; `Enter` on a buddy browses their shares.
+- **Private messages:** chat with other users on the Chat tab. `m` on any search
+  result, download, upload or buddy writes to that user, and messages sent while you
+  were offline arrive when you log in. The history is kept between runs.
+- **Built-in help:** `?` on any tab explains what it is for and lists its keys.
 - **Wishlist:** saved searches keep running in the background, one every 12
   minutes as the server allows, and the Wishlist tab counts files you have not seen
   yet. `w` on a search's results adds it; `Enter` on a wish opens everything found.
@@ -145,7 +149,8 @@ Without this, you can still download from peers that are reachable themselves.
 | everywhere | `s`, `/` | open the search box (seekr starts in the results list) |
 | | `?` | explain the current tab: what it is for, how it works, its keys |
 | | `Alt-s` | toggle between the search box and the results, also while typing |
-| | `Tab`, `Alt-1`–`7`, `F1`–`F7` | switch between Search, Downloads, Uploads, Settings, Browse, Buddies and Wishlist |
+| | `Tab`, `Alt-1`–`8`, `F1`–`F8` | switch between Search, Downloads, Uploads, Settings, Browse, Buddies, Wishlist and Chat |
+| | `m` | write a private message to the user of the selected row |
 | | `A` | add the user of the selected result, download or upload as a buddy |
 | | `q`, `Ctrl-c` | quit (`q` asks again while transfers are running) |
 | lists | `10j`, `10k`, `10↑` … | vim-style counts: move 10 rows (the count shows bottom left) |
@@ -171,6 +176,9 @@ Without this, you can still download from peers that are reachable themselves.
 | buddies | `a` | type a username to add (`Enter` adds it) |
 | | `x` | remove the selected buddy |
 | | `Enter`, `b` | browse the buddy's shares |
+| chat | `Enter`, `i` | write to the selected conversation (`Enter` sends, `Esc` stops) |
+| | `a` | start a conversation with a username |
+| | `b` / `x` | browse the user / delete the conversation |
 | wishlist | `a` | type a query to add (`Enter` adds it); `w` on search results does the same |
 | | `Enter` | open everything found for the wish on the Search tab |
 | | `r` | run the wish now (the next scheduled one waits a full interval) |
@@ -184,6 +192,7 @@ seekr search "artist album" --full-paths [--wishlist]
 seekr download <user> '<remote\path\to\file.flac>'
 seekr userinfo <user>                   # test a peer connection
 seekr browse <user>                     # list a user's shared folders
+seekr message <user> "text"             # send a private message, print replies
 seekr portmap                           # test automatic port forwarding (UPnP)
 seekr shares ["query"] [--dir PATH]     # what you share, and what a search would find
 seekr logout                            # forget saved credentials
@@ -213,6 +222,7 @@ server = "server.slsknet.org:2242"      # default
 | `~/.local/share/seekr/downloads.json` | the download list |
 | `~/.local/share/seekr/buddies.json` | the buddy list |
 | `~/.local/share/seekr/wishlist.json` | wishlist queries |
+| `~/.local/share/seekr/chats.json` | private message history (mode 600) |
 | `~/.cache/seekr/shares.json` | cached audio properties of shared files |
 | `~/.local/state/seekr/seekr.log` | log of the last TUI session (`RUST_LOG=debug` for more) |
 
@@ -238,7 +248,7 @@ server = "server.slsknet.org:2242"      # default
 - [x] Distributed search network (as a child node; relaying searches to children is next)
 - [x] Browsing a user's shares
 - [x] Wishlist
-- [ ] Private messages
+- [x] Private messages
 - [x] Automatic port mapping (UPnP)
 - [ ] AUR package
 

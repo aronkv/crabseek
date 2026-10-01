@@ -118,6 +118,26 @@ fn page(tab: Tab) -> Page {
                 ("x", "remove the buddy"),
             ],
         },
+        Tab::Chat => Page {
+            title: "Chat",
+            about: &[
+                "Private messages with other Soulseek users, one conversation per user, the \
+                 newest on top. New messages show in the status line and as a count on the tab.",
+                "Messages sent to you while you are offline wait on the server and arrive when \
+                 you log in. The last 500 messages per user are kept between runs \
+                 (chats.json, readable only by you).",
+            ],
+            keys: &[
+                (
+                    "Enter or i",
+                    "write to the selected user (Enter sends, Esc stops)",
+                ),
+                ("a", "start a conversation: type a username"),
+                ("m (on other tabs)", "write to the user of the selected row"),
+                ("b", "browse the user's shares"),
+                ("x", "delete the conversation"),
+            ],
+        },
         Tab::Wishlist => Page {
             title: "Wishlist",
             about: &[
@@ -146,7 +166,8 @@ fn page(tab: Tab) -> Page {
 }
 
 const GENERAL: &[(&str, &str)] = &[
-    ("Tab / Shift-Tab, Alt-1…7, F1…F7", "switch tabs"),
+    ("Tab / Shift-Tab, Alt-1…8, F1…F8", "switch tabs"),
+    ("m", "write a private message to the selected row's user"),
     ("j / k, ↓ / ↑, PgUp / PgDn, g / G", "move"),
     ("10j, 10k, 5G", "vim counts: move 10 rows, jump to row 5"),
     ("Alt-s", "jump to the search box from anywhere"),

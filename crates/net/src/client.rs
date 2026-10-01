@@ -132,6 +132,15 @@ pub enum Event {
         /// Shared folders that could not be read.
         errors: Vec<String>,
     },
+    /// A private message for us (already acknowledged to the server).
+    PrivateMessage {
+        /// Unix seconds.
+        timestamp: u32,
+        username: String,
+        message: String,
+        /// False when the server re-sends one we missed while offline.
+        new: bool,
+    },
     /// Our place in the distributed search network changed.
     Distrib(DistribStatus),
     /// We answered someone's search with `results` files.
@@ -395,6 +404,18 @@ impl Client {
     /// for watched users. The answer is [`ServerResponse::UserStats`].
     pub fn user_stats(&self, username: impl Into<String>) -> Result<(), ShutDown> {
         self.send_server(ServerRequest::GetUserStats(username.into()))
+    }
+
+    /// Sends a private message.
+    pub fn message_user(
+        &self,
+        username: impl Into<String>,
+        message: impl Into<String>,
+    ) -> Result<(), ShutDown> {
+        self.send_server(ServerRequest::MessageUser {
+            username: username.into(),
+            message: message.into(),
+        })
     }
 
     fn send_server(&self, msg: ServerRequest) -> Result<(), ShutDown> {
@@ -929,6 +950,22 @@ impl Actor {
                 self.on_embedded_message(code, payload).await
             }
             ServerResponse::ResetDistributed => self.reset_distributed().await,
+            ServerResponse::MessageUser {
+                id,
+                timestamp,
+                username,
+                message,
+                new,
+            } => {
+                // Unacknowledged messages are sent again and again.
+                self.send_server(ServerRequest::MessageAcked(id)).await;
+                self.emit(Event::PrivateMessage {
+                    timestamp,
+                    username,
+                    message,
+                    new,
+                });
+            }
             other => self.emit(Event::ServerMessage(other)),
         }
     }

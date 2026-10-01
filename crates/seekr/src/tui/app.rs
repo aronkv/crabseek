@@ -10,6 +10,7 @@ use seekr_proto::server::ServerResponse;
 use seekr_proto::shares::SharedFileList;
 
 use super::buddies::Buddies;
+use super::chat::{self, ChatInput, Chats};
 use super::results::Results;
 use super::settings::{Settings, SettingsAction};
 use super::transfers::Transfers;
@@ -27,11 +28,12 @@ pub enum Tab {
     Browse,
     Buddies,
     Wishlist,
+    Chat,
 }
 
 impl Tab {
     /// Tab-bar order; the numbers (`Alt-1`…`Alt-6`) follow it.
-    const ORDER: [Tab; 7] = [
+    const ORDER: [Tab; 8] = [
         Tab::Search,
         Tab::Transfers,
         Tab::Uploads,
@@ -39,6 +41,7 @@ impl Tab {
         Tab::Browse,
         Tab::Buddies,
         Tab::Wishlist,
+        Tab::Chat,
     ];
 
     pub fn index(self) -> usize {
@@ -122,6 +125,8 @@ pub struct App {
     buddies_path: Option<PathBuf>,
     pub wishlist: Wishlist,
     wishlist_path: Option<PathBuf>,
+    pub chats: Chats,
+    chats_path: Option<PathBuf>,
     confirm_quit: bool,
     /// Vim-style count typed before a motion (`10k`).
     pub count: Option<usize>,
@@ -184,6 +189,8 @@ impl App {
             buddies_path: None,
             wishlist: Wishlist::default(),
             wishlist_path: None,
+            chats: Chats::default(),
+            chats_path: None,
         };
         app.restore(saved);
         Ok(app)
@@ -227,6 +234,20 @@ impl App {
         if requeued > 0 {
             self.status = format!("resuming {requeued} unfinished downloads from last time");
         }
+    }
+
+    /// Puts the saved conversations in place.
+    pub fn with_chats(mut self, list: Vec<chat::Conversation>, path: Option<PathBuf>) -> Self {
+        self.chats = Chats::new(list);
+        self.chats_path = path;
+        self
+    }
+
+    /// Opens the Chat tab on `username`'s conversation, ready to type.
+    fn open_chat(&mut self, username: &str) {
+        self.chats.open(username);
+        self.chats.input = Some(ChatInput::Message(String::new()));
+        self.tab = Tab::Chat;
     }
 
     /// Puts the saved wishlist queries in place.
@@ -354,12 +375,20 @@ impl App {
             Tab::Browse => self.browse.as_ref().map(|b| b.username.clone()),
             Tab::Transfers => self.transfers.selected().map(|t| t.username.clone()),
             Tab::Uploads => self.uploads.selected().map(|u| u.username.clone()),
-            Tab::Settings | Tab::Buddies | Tab::Wishlist => None,
+            Tab::Settings | Tab::Buddies | Tab::Wishlist | Tab::Chat => None,
         }
     }
 
     /// Saves the download list if it changed.
     pub fn persist(&mut self) {
+        if self.chats.dirty {
+            self.chats.dirty = false;
+            if let Some(path) = &self.chats_path
+                && let Err(e) = chat::save(path, &self.chats.list)
+            {
+                self.status = format!("could not save the chats: {e:#}");
+            }
+        }
         if !self.transfers.dirty {
             return;
         }
@@ -382,6 +411,21 @@ impl App {
                 {
                     self.status = format!("wishlist: {new} new files for {query:?}");
                 }
+            }
+            Event::PrivateMessage {
+                timestamp,
+                username,
+                message,
+                ..
+            } => {
+                let seen = self.tab == Tab::Chat
+                    && self
+                        .chats
+                        .selected()
+                        .is_some_and(|c| c.username == username);
+                let preview: String = message.chars().take(60).collect();
+                self.status = format!("message from {username}: {preview}");
+                self.chats.receive(&username, message, timestamp, seen);
             }
             Event::ServerMessage(ServerResponse::WishlistInterval(secs)) => {
                 self.wishlist.set_interval(secs)
@@ -514,6 +558,10 @@ impl App {
             self.on_wish_input_key(key);
             return;
         }
+        if self.tab == Tab::Chat && self.chats.input.is_some() {
+            self.on_chat_input_key(key);
+            return;
+        }
 
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         // Digits build a count for the next motion, like in vim.
@@ -544,6 +592,13 @@ impl App {
             KeyCode::Char('5') | KeyCode::F(5) => self.tab = Tab::Browse,
             KeyCode::Char('6') | KeyCode::F(6) => self.tab = Tab::Buddies,
             KeyCode::Char('7') | KeyCode::F(7) => self.tab = Tab::Wishlist,
+            KeyCode::Char('8') | KeyCode::F(8) => self.tab = Tab::Chat,
+            // `m` writes to the user of the selected row.
+            KeyCode::Char('m') if self.tab != Tab::Chat => {
+                if let Some(user) = self.selected_user() {
+                    self.open_chat(&user);
+                }
+            }
             // `A` adds the user of the selected row as a buddy.
             KeyCode::Char('A') => {
                 if let Some(user) = self.selected_user() {
@@ -561,6 +616,7 @@ impl App {
                 Tab::Uploads => self.on_uploads_key(key, count),
                 Tab::Buddies => self.on_buddies_key(key, count),
                 Tab::Wishlist => self.on_wishlist_key(key, count),
+                Tab::Chat => self.on_chat_key(key, count),
                 Tab::Settings => {
                     // Settings moves one row per key; repeat for a count.
                     let times = if matches!(
@@ -579,6 +635,75 @@ impl App {
         }
         if self.tab == Tab::Buddies && tab_before != Tab::Buddies {
             self.refresh_buddy_stats();
+        }
+    }
+
+    fn on_chat_key(&mut self, key: KeyEvent, count: Option<usize>) {
+        let n = count.unwrap_or(1) as isize;
+        let c = &mut self.chats;
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => c.move_by(n),
+            KeyCode::Up | KeyCode::Char('k') => c.move_by(-n),
+            KeyCode::Home | KeyCode::Char('g') => c.selected = 0,
+            KeyCode::End | KeyCode::Char('G') => c.move_by(isize::MAX),
+            KeyCode::Enter | KeyCode::Char('i') if c.selected().is_some() => {
+                c.input = Some(ChatInput::Message(String::new()))
+            }
+            KeyCode::Char('a') => c.input = Some(ChatInput::NewUser(String::new())),
+            KeyCode::Char('b') => {
+                if let Some(user) = c.selected().map(|c| c.username.clone()) {
+                    self.start_browse(user);
+                }
+            }
+            KeyCode::Char('x') | KeyCode::Delete => {
+                if let Some(user) = self.chats.remove_selected() {
+                    self.status = format!("deleted the conversation with {user}");
+                }
+            }
+            _ => {}
+        }
+        self.chats.mark_selected_read();
+    }
+
+    fn on_chat_input_key(&mut self, key: KeyEvent) {
+        let Some(input) = &mut self.chats.input else {
+            return;
+        };
+        let text = match input {
+            ChatInput::Message(t) | ChatInput::NewUser(t) => t,
+        };
+        match key.code {
+            KeyCode::Esc => self.chats.input = None,
+            KeyCode::Backspace => {
+                text.pop();
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => text.clear(),
+            KeyCode::Char(ch) => text.push(ch),
+            KeyCode::Enter => match self.chats.input.take() {
+                Some(ChatInput::NewUser(user)) => {
+                    let user = user.trim().to_owned();
+                    if !user.is_empty() {
+                        self.open_chat(&user);
+                    }
+                }
+                Some(ChatInput::Message(message)) => {
+                    // Stay in the box for the next line.
+                    self.chats.input = Some(ChatInput::Message(String::new()));
+                    let message = message.trim().to_owned();
+                    let Some(user) = self.chats.selected().map(|c| c.username.clone()) else {
+                        return;
+                    };
+                    if message.is_empty() {
+                        return;
+                    }
+                    match self.client.message_user(&user, &message) {
+                        Ok(()) => self.chats.sent(&user, message, chat::now()),
+                        Err(e) => self.status = e.to_string(),
+                    }
+                }
+                None => {}
+            },
+            _ => {}
         }
     }
 

@@ -72,6 +72,14 @@ enum Command {
         #[arg(long, default_value_t = 60)]
         timeout_secs: u64,
     },
+    /// Send a private message, then print replies for a while.
+    Message {
+        username: String,
+        text: String,
+        /// How long to wait for replies.
+        #[arg(long, default_value_t = 30)]
+        wait_secs: u64,
+    },
     /// Check automatic port forwarding (UPnP): open the listen port on the
     /// router, report, and close it again.
     Portmap,
@@ -117,6 +125,31 @@ async fn main() -> anyhow::Result<()> {
             username,
             timeout_secs,
         } => browse(username, timeout_secs).await,
+        Command::Message {
+            username,
+            text,
+            wait_secs,
+        } => {
+            let (client, mut events) = start_client().await?;
+            client.message_user(&username, &text)?;
+            println!("sent to {username}; waiting {wait_secs}s for messages...");
+            let deadline = tokio::time::sleep(Duration::from_secs(wait_secs));
+            tokio::pin!(deadline);
+            loop {
+                tokio::select! {
+                    _ = &mut deadline => break,
+                    event = events.recv() => match event {
+                        Some(Event::PrivateMessage { username, message, new, .. }) => {
+                            println!("[{username}]{} {message}", if new { "" } else { " (missed)" });
+                        }
+                        Some(Event::ServerClosed { reason }) => anyhow::bail!("disconnected: {reason}"),
+                        Some(_) => {}
+                        None => break,
+                    },
+                }
+            }
+            Ok(())
+        }
         Command::Portmap => {
             let port = config::load_or_default()?.listen_port;
             println!("asking the router to open TCP port {port}...");
@@ -371,6 +404,9 @@ fn print_event(event: &Event) -> bool {
             }
         }
         Event::Distrib(status) => println!("distributed network: {status:?}"),
+        Event::PrivateMessage {
+            username, message, ..
+        } => println!("[{username}] says: {message}"),
         Event::PortMap(status) => println!("port forwarding: {status:?}"),
         Event::BrowseResult { username, list } => {
             println!("[{username}] shares {} folders", list.dirs.len())

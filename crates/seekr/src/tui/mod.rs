@@ -2,6 +2,7 @@
 
 mod app;
 mod buddies;
+mod chat;
 mod help;
 mod login;
 mod results;
@@ -109,6 +110,10 @@ async fn login_then_run(
                         Some(downloads_path),
                     )?
                     .with_buddies(buddies, Some(buddies_path))
+                    .with_chats(
+                        chat::load(&config::chats_path()?),
+                        Some(config::chats_path()?),
+                    )
                     .with_wishlist(
                         crate::persist::load_wishlist(&config::wishlist_path()?),
                         Some(config::wishlist_path()?),
@@ -208,6 +213,7 @@ mod tests {
     use seekr_proto::search::{SearchFile, SearchResponse};
 
     use super::app::{ActiveSearch, Focus, Tab};
+    use super::chat;
     use super::*;
     use crate::config::Config;
 
@@ -678,6 +684,51 @@ mod tests {
         // `q` closes the help rather than quitting.
         app.on_key(KeyEvent::from(KeyCode::Char('q')));
         assert!(!app.help && !app.quit);
+    }
+
+    #[test]
+    fn chat_receives_opens_and_renders() {
+        use crossterm::event::KeyModifiers;
+        let mut app = app_with_results();
+        app.on_event(Event::PrivateMessage {
+            timestamp: chat::now(),
+            username: "carol".into(),
+            message: "szia! megvan még a Geogaddi FLAC-ben?".into(),
+            new: true,
+        });
+        assert_eq!(app.chats.total_unread(), 1);
+        assert!(app.status.starts_with("message from carol"));
+        assert!(draw(&mut app).contains("8 Chat (1)"));
+
+        // `m` on a search result writes to that row's user.
+        app.on_key(KeyEvent::from(KeyCode::Char('m')));
+        assert_eq!(app.tab, Tab::Chat);
+        assert_eq!(app.chats.selected().unwrap().username, "alice");
+        assert!(app.chats.input.is_some());
+        for c in "hello".chars() {
+            app.on_key(KeyEvent::from(KeyCode::Char(c)));
+        }
+        app.on_key(KeyEvent::from(KeyCode::Esc));
+
+        // Reading carol's conversation clears its unread count.
+        app.on_key(KeyEvent::new(KeyCode::Char('8'), KeyModifiers::ALT));
+        app.on_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.chats.selected().unwrap().username, "carol");
+        assert_eq!(app.chats.total_unread(), 0);
+        let screen = draw(&mut app);
+        println!("{screen}");
+        assert!(screen.contains("carol: szia! megvan"));
+        assert!(screen.contains("Conversations"));
+
+        // Sending with an offline client reports the error and keeps the
+        // conversation unchanged.
+        app.on_key(KeyEvent::from(KeyCode::Char('i')));
+        for c in "igen".chars() {
+            app.on_key(KeyEvent::from(KeyCode::Char(c)));
+        }
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(app.status, "client has shut down");
+        assert_eq!(app.chats.selected().unwrap().messages.len(), 1);
     }
 
     #[test]
