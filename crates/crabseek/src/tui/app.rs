@@ -152,6 +152,11 @@ pub struct App {
     pub count: Option<usize>,
     /// The `?` help window is open.
     pub help: bool,
+    /// Running in the background process: `q` and Ctrl-C detach the
+    /// terminal instead of quitting, `Q` quits for good.
+    pub background: bool,
+    /// Set by a key that detaches; the event loop hands it to the host.
+    pub detach: bool,
     /// Finished downloads waiting to be announced together.
     download_batch: DownloadBatch,
 }
@@ -207,6 +212,8 @@ impl App {
             confirm_quit: false,
             count: None,
             help: false,
+            background: false,
+            detach: false,
             download_batch: DownloadBatch::default(),
             downloads_path,
             buddies_path: None,
@@ -216,6 +223,7 @@ impl App {
             chats_path: None,
         };
         app.settings.notifications = cfg.notifications;
+        app.settings.background = cfg.background;
         app.restore(saved);
         Ok(app)
     }
@@ -555,7 +563,11 @@ impl App {
     pub fn on_key(&mut self, key: KeyEvent) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         if ctrl && key.code == KeyCode::Char('c') {
-            self.quit = true;
+            if self.background {
+                self.detach_terminal();
+            } else {
+                self.quit = true;
+            }
             return;
         }
         if self.help {
@@ -565,7 +577,7 @@ impl App {
             }
             return;
         }
-        if key.code != KeyCode::Char('q') {
+        if !matches!(key.code, KeyCode::Char('q' | 'Q')) {
             self.confirm_quit = false;
         }
         // `Alt-s` types nothing, so it toggles the search box from
@@ -625,7 +637,8 @@ impl App {
         let tab_before = self.tab;
 
         match key.code {
-            KeyCode::Char('q') => self.request_quit(),
+            KeyCode::Char('q') if self.background => self.detach_terminal(),
+            KeyCode::Char('q' | 'Q') => self.request_quit(),
             KeyCode::Tab => self.tab = self.tab.cycle(1),
             KeyCode::BackTab => self.tab = self.tab.cycle(-1),
             // Digits only get here with Alt; plain ones are counts.
@@ -862,6 +875,21 @@ impl App {
                 };
                 return;
             }
+            SettingsAction::SetBackground(enabled) => config::save_background(enabled).map(|()| {
+                match (enabled, self.background) {
+                    (true, false) => {
+                        "background mode on from the next start: q will then leave crabseek running"
+                            .to_owned()
+                    }
+                    (false, true) => {
+                        // Running in the background now: q quits from here on.
+                        self.background = false;
+                        "background mode off: q now quits crabseek".to_owned()
+                    }
+                    (true, true) => "background mode on".to_owned(),
+                    (false, false) => "background mode off".to_owned(),
+                }
+            }),
             SettingsAction::SetNotifications(enabled) => {
                 config::save_notifications(enabled).map(|()| {
                     if enabled {
@@ -922,6 +950,12 @@ impl App {
             }
             _ => {}
         }
+    }
+
+    /// Background mode: close this terminal, keep crabseek running.
+    fn detach_terminal(&mut self) {
+        self.detach = true;
+        self.status = "crabseek keeps running in the background".to_owned();
     }
 
     fn request_quit(&mut self) {

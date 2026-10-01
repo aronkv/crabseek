@@ -14,6 +14,7 @@ pub enum Item {
     ListenPort,
     Upnp,
     Notifications,
+    Background,
     Shared(usize),
     AddShared,
 }
@@ -32,6 +33,7 @@ pub enum SettingsAction {
     SetListenPort(u16),
     SetUpnp(bool),
     SetNotifications(bool),
+    SetBackground(bool),
     SetSharedDirs(Vec<PathBuf>),
 }
 
@@ -41,6 +43,8 @@ pub struct Settings {
     pub upnp: bool,
     /// Desktop notifications; set by the app from the config.
     pub notifications: bool,
+    /// Background mode; set by the app from the config.
+    pub background: bool,
     pub shared: Vec<PathBuf>,
     pub selected: usize,
     pub edit: Option<Edit>,
@@ -54,6 +58,7 @@ impl Settings {
             listen_port,
             upnp,
             notifications: false,
+            background: false,
             shared,
             selected: 0,
             edit: None,
@@ -67,6 +72,7 @@ impl Settings {
             Item::ListenPort,
             Item::Upnp,
             Item::Notifications,
+            Item::Background,
         ];
         items.extend((0..self.shared.len()).map(Item::Shared));
         items.push(Item::AddShared);
@@ -75,7 +81,7 @@ impl Settings {
 
     /// Row index of the shared folder `i`.
     fn shared_index(i: usize) -> usize {
-        i + 4
+        i + 5
     }
 
     fn selected_item(&self) -> Item {
@@ -108,6 +114,12 @@ impl Settings {
                 self.notifications = !self.notifications;
                 return SettingsAction::SetNotifications(self.notifications);
             }
+            KeyCode::Enter | KeyCode::Char('e' | ' ')
+                if self.selected_item() == Item::Background =>
+            {
+                self.background = !self.background;
+                return SettingsAction::SetBackground(self.background);
+            }
             KeyCode::Enter | KeyCode::Char('e') => self.start_edit(self.selected_item()),
             KeyCode::Char('a') => {
                 self.selected = count - 1;
@@ -129,7 +141,7 @@ impl Settings {
         let text = match item {
             Item::DownloadDir => display_path(&self.download_dir),
             Item::ListenPort => self.listen_port.to_string(),
-            Item::Upnp | Item::Notifications => return,
+            Item::Upnp | Item::Notifications | Item::Background => return,
             Item::Shared(i) => display_path(&self.shared[i]),
             Item::AddShared => "~/".to_owned(),
         };
@@ -194,7 +206,7 @@ impl Settings {
                 self.download_dir = path.clone();
                 SettingsAction::SetDownloadDir(path)
             }
-            Item::ListenPort | Item::Upnp | Item::Notifications => {
+            Item::ListenPort | Item::Upnp | Item::Notifications | Item::Background => {
                 unreachable!("handled above")
             }
             item @ (Item::Shared(_) | Item::AddShared) => {
@@ -344,7 +356,7 @@ mod tests {
         assert_eq!(s.on_key(key(KeyCode::Enter)), SettingsAction::None);
         s.on_key(key(KeyCode::Esc));
 
-        s.selected = 4;
+        s.selected = 5;
         assert_eq!(
             s.on_key(key(KeyCode::Char('x'))),
             SettingsAction::SetSharedDirs(vec![])

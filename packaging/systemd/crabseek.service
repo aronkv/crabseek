@@ -1,0 +1,14 @@
+# Runs crabseek in the background from login on; `crabseek` attaches to it.
+# Enable with: systemctl --user enable --now crabseek
+[Unit]
+Description=crabseek Soulseek client (background)
+Documentation=https://github.com/DarkAaronfox/crabseek
+
+[Service]
+ExecStart=@BIN@ daemon
+ExecStop=@BIN@ stop
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

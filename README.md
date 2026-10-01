@@ -44,6 +44,8 @@ you type `crabseek`, search, and download whole albums in a few keystrokes.
 - **Private messages:** chat with other users on the Chat tab. `m` on any search
   result, download, upload or buddy writes to that user, and messages sent while you
   were offline arrive when you log in. The history is kept between runs.
+- **Background mode (optional):** `q` closes the window but crabseek keeps sharing,
+  downloading and searching; `crabseek` brings it back, like tmux. Off by default.
 - **Desktop notifications (optional):** finished downloads (an album is one
   notification, not twenty), private messages and new wishlist results. Off by
   default; turn them on in Settings.
@@ -130,6 +132,21 @@ back if the saved password stops working.
 Your credentials are saved only after the server accepts them. See
 [Security](#security) for where and how. To forget them, run `crabseek logout`.
 
+### Background mode
+
+Off by default: quitting stops sharing and downloads until the next start. Turn on
+**Settings → Background mode**, and from the next start:
+
+- `q` (or closing the terminal) only detaches: crabseek keeps sharing, downloading,
+  running the wishlist and receiving messages.
+- `crabseek` attaches again, right where you left off.
+- `Q` inside, or `crabseek stop` from a shell, quits for good.
+
+To start it at login as well, enable the systemd user service that the install script
+puts in place: `systemctl --user enable --now crabseek`. While it runs in the background,
+CLI commands that log in (`search`, `download`, ...) refuse to start, because a second
+login would push the background one off the server.
+
 ### Let peers reach you
 
 Soulseek is peer-to-peer. Downloads and sharing work best when other users can connect
@@ -190,16 +207,17 @@ Without this, you can still download from peers that are reachable themselves.
 ### Command line
 
 ```sh
-crabseek                                   # the TUI
+crabseek                                    # the TUI
 crabseek search "artist album" --full-paths [--wishlist]
 crabseek download <user> '<remote\path\to\file.flac>'
-crabseek userinfo <user>                   # test a peer connection
-crabseek browse <user>                     # list a user's shared folders
-crabseek message <user> "text"             # send a private message, print replies
-crabseek portmap                           # test automatic port forwarding (UPnP)
-crabseek shares ["query"] [--dir PATH]     # what you share, and what a search would find
-crabseek logout                            # forget saved credentials
-crabseek config-path                       # where the config lives
+crabseek userinfo <user>                    # test a peer connection
+crabseek browse <user>                      # list a user's shared folders
+crabseek message <user> "text"              # send a private message, print replies
+crabseek portmap                            # test automatic port forwarding (UPnP)
+crabseek shares ["query"] [--dir PATH]      # what you share, and what a search would find
+crabseek stop                               # quit crabseek running in the background
+crabseek logout                             # forget saved credentials
+crabseek config-path                        # where the config lives
 ```
 
 ## Configuration
@@ -211,12 +229,13 @@ The download folder, the listen port and the shared folders can be changed in th
 ```toml
 username = "..."                        # written by the login screen
 password = "..."
-download_dir = "~/Downloads/crabseek"      # default
+download_dir = "~/Downloads/crabseek"   # default
 shared_dirs = ["~/Music"]               # default
 upload_slots = 2                        # default
 listen_port = 2234                      # default
 upnp = true                             # default: open the port on the router
 notifications = false                   # default: no desktop notifications
+background = false                      # default: q quits instead of detaching
 server = "server.slsknet.org:2242"      # default
 ```
 

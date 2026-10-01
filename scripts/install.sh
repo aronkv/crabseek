@@ -23,6 +23,14 @@ cargo build --release --locked
 install -Dm755 target/release/crabseek "$BIN"
 echo "installed $BIN"
 
+# A systemd user unit for background mode at login (installed, not enabled).
+UNIT_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+if [ "$PREFIX" = "$HOME/.local" ] && command -v systemctl >/dev/null 2>&1; then
+    mkdir -p "$UNIT_DIR"
+    sed "s|@BIN@|$BIN|g" packaging/systemd/crabseek.service > "$UNIT_DIR/crabseek.service"
+    systemctl --user daemon-reload 2>/dev/null || true
+fi
+
 # The project used to be called seekr; remove that old binary, but only if
 # it is really ours (another project ships a program called seekr).
 OLD="$PREFIX/bin/seekr"

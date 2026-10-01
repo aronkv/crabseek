@@ -83,6 +83,9 @@ fn page(tab: Tab) -> Page {
                  on your router by itself; otherwise forward it by hand.",
                 "Shared folders: the music others can search, browse and download from you. \
                  Soulseek expects everyone to share.",
+                "Background mode (off by default): q only closes the window, and crabseek keeps \
+                 sharing, downloading, running the wishlist and receiving messages. Running \
+                 crabseek again brings it back; Q or `crabseek stop` quits for good.",
                 "Desktop notifications (off by default): finished downloads (an album's \
                  files come as one notification), private messages and new wishlist results.",
                 "Distributed network: crabseek joins the network-wide search tree, so searches \
@@ -177,7 +180,11 @@ const GENERAL: &[(&str, &str)] = &[
     ("10j, 10k, 5G", "vim counts: move 10 rows, jump to row 5"),
     ("Alt-s", "jump to the search box from anywhere"),
     ("?", "this help (Esc or ? closes it)"),
-    ("q / Ctrl-c", "quit (q asks again while transfers run)"),
+    (
+        "q / Ctrl-c",
+        "quit (asks again while transfers run); in background mode: detach",
+    ),
+    ("Q", "quit, also in background mode"),
 ];
 
 fn key_lines(keys: &[(&str, &str)]) -> Vec<Line<'static>> {

@@ -37,6 +37,9 @@ pub struct Config {
     /// Desktop notifications; off unless turned on.
     #[serde(default)]
     pub notifications: bool,
+    /// Keep running in the background after `q`; off unless turned on.
+    #[serde(default)]
+    pub background: bool,
 }
 
 impl Default for Config {
@@ -269,6 +272,12 @@ pub fn save_download_dir(dir: &Path) -> anyhow::Result<()> {
 pub fn save_listen_port(port: u16) -> anyhow::Result<()> {
     update(|table| {
         table.insert("listen_port".into(), i64::from(port).into());
+    })
+}
+
+pub fn save_background(enabled: bool) -> anyhow::Result<()> {
+    update(|table| {
+        table.insert("background".into(), enabled.into());
     })
 }
 

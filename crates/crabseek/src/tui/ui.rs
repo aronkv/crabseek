@@ -49,7 +49,12 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         help_spans.push(Span::raw(format!(" {count} ")).black().on_yellow());
     }
     help_spans.push(Span::raw(" ? help ·").cyan());
-    help_spans.push(Span::raw(help_line(app)).dark_gray());
+    let line = if app.background {
+        help_line(app).replace("q quit", "q detach · Q stop")
+    } else {
+        help_line(app).to_owned()
+    };
+    help_spans.push(Span::raw(line).dark_gray());
     frame.render_widget(Paragraph::new(Line::from(help_spans)), help);
 
     if app.help {
@@ -1122,6 +1127,25 @@ fn render_settings(frame: &mut Frame, app: &mut App, area: Rect) {
         ),
     );
     lines.push(Line::default());
+    lines.push(Line::from("Background mode").bold());
+    push_item(
+        &mut lines,
+        4,
+        Item::Background,
+        format!(
+            "[{}] keep running in the background after q (Q or `crabseek stop` quits)",
+            if s.background { "x" } else { " " }
+        ),
+    );
+    lines.push(
+        Line::from(if app.background {
+            "  running in the background now: q detaches this terminal"
+        } else {
+            "  off: q quits crabseek (sharing and downloads stop until the next start)"
+        })
+        .dark_gray(),
+    );
+    lines.push(Line::default());
     lines.push(Line::from("Distributed network").bold());
     lines.push(
         Line::from(match &app.distrib {
@@ -1157,11 +1181,11 @@ fn render_settings(frame: &mut Frame, app: &mut App, area: Rect) {
         .green(),
     );
     for (i, dir) in s.shared.iter().enumerate() {
-        push_item(&mut lines, i + 4, Item::Shared(i), display_path(dir));
+        push_item(&mut lines, i + 5, Item::Shared(i), display_path(dir));
     }
     push_item(
         &mut lines,
-        s.shared.len() + 4,
+        s.shared.len() + 5,
         Item::AddShared,
         "+ add folder".to_owned(),
     );

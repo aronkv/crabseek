@@ -6,6 +6,7 @@ mod chat;
 mod help;
 mod login;
 mod notify;
+pub mod remote;
 mod results;
 mod settings;
 mod transfers;
@@ -13,13 +14,16 @@ mod ui;
 mod uploads;
 mod wishlist;
 
+use std::pin::Pin;
 use std::time::Duration;
 
 use crabseek_net::{Client, Event};
 use crossterm::event::{
     Event as TermEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
+use ratatui::Terminal;
+use ratatui::backend::Backend;
 use tokio::sync::mpsc;
 
 use crate::config::{self, Config};
@@ -29,23 +33,58 @@ use login::{LoginAction, LoginForm};
 /// Redraw at least this often so timers and speeds stay current.
 const TICK: Duration = Duration::from_millis(500);
 
+/// What drives the UI: terminal events, or (in background mode) requests
+/// from the attach protocol.
+pub enum Input {
+    Term(TermEvent),
+    /// A terminal (re)attached: repaint everything.
+    Redraw,
+    /// Quit for good (`crabseek stop`, SIGTERM).
+    Stop,
+}
+
+pub type InputStream = Pin<Box<dyn Stream<Item = std::io::Result<Input>> + Send>>;
+
+/// Where the UI runs: the local terminal, or a background process that a
+/// terminal attaches to.
+pub trait Host {
+    /// Lets the current terminal go; the UI keeps running without one.
+    fn detach(&mut self);
+}
+
+/// The local terminal; there is nothing to detach from.
+struct LocalHost;
+
+impl Host for LocalHost {
+    fn detach(&mut self) {}
+}
+
+/// The UI in this terminal, in this process (background mode off).
 pub async fn run(cfg: Config) -> anyhow::Result<()> {
     let mut terminal = ratatui::init();
-    let result = login_then_run(&mut terminal, cfg).await;
+    let input: InputStream = Box::pin(EventStream::new().map(|e| e.map(Input::Term)));
+    let result = login_then_run(&mut terminal, input, &mut LocalHost, false, cfg).await;
     ratatui::restore();
     result
 }
 
-/// Next key press, or `None` when the terminal input ends.
-async fn next_key(input: &mut EventStream) -> anyhow::Result<Option<KeyEvent>> {
+enum Next {
+    Key(KeyEvent),
+    Redraw,
+    End,
+}
+
+/// The next key press, repaint request or end of input.
+async fn next_input(input: &mut InputStream) -> anyhow::Result<Next> {
     loop {
         match input.next().await {
-            Some(Ok(TermEvent::Key(key))) if key.kind == KeyEventKind::Press => {
-                return Ok(Some(key));
+            Some(Ok(Input::Term(TermEvent::Key(key)))) if key.kind == KeyEventKind::Press => {
+                return Ok(Next::Key(key));
             }
-            Some(Ok(_)) => {}
+            Some(Ok(Input::Redraw)) => return Ok(Next::Redraw),
+            Some(Ok(Input::Stop)) | None => return Ok(Next::End),
+            Some(Ok(Input::Term(_))) => {}
             Some(Err(e)) => return Err(e.into()),
-            None => return Ok(None),
         }
     }
 }
@@ -54,17 +93,23 @@ async fn next_key(input: &mut EventStream) -> anyhow::Result<Option<KeyEvent>> {
 /// box), or asks for them when there are none or the server rejects them.
 /// Credentials typed into the form are saved only after the server
 /// accepted them; the config file and its folder are created then.
-async fn login_then_run(
-    terminal: &mut ratatui::DefaultTerminal,
+pub async fn login_then_run<B>(
+    terminal: &mut Terminal<B>,
+    mut input: InputStream,
+    host: &mut dyn Host,
+    background: bool,
     mut cfg: Config,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    B: Backend,
+    B::Error: Send + Sync + 'static,
+{
     enum Screen {
         Form,
         /// Saved credentials: connecting, or a non-credential error.
         Splash(Option<String>),
     }
 
-    let mut input = EventStream::new();
     let config_path = config::display_path(&config::path()?);
     let mut form = LoginForm::new(cfg.username.clone());
     let mut from_form = false;
@@ -87,10 +132,11 @@ async fn login_then_run(
                 })?;
                 tokio::select! {
                     result = &mut start => break result,
-                    key = next_key(&mut input) => match key? {
-                        Some(key) if is_quit(key) => return Ok(()),
-                        Some(_) => {}
-                        None => return Ok(()),
+                    next = next_input(&mut input) => match next? {
+                        Next::Key(key) if is_quit(key) => return Ok(()),
+                        Next::Key(_) => {}
+                        Next::Redraw => terminal.clear()?,
+                        Next::End => return Ok(()),
                     },
                 }
             };
@@ -103,7 +149,7 @@ async fn login_then_run(
                     let saved = crate::persist::load(&downloads_path);
                     let buddies_path = config::buddies_path()?;
                     let buddies = crate::persist::load_buddies(&buddies_path);
-                    let app = App::new(
+                    let mut app = App::new(
                         client,
                         cfg.username.clone(),
                         &cfg,
@@ -119,7 +165,8 @@ async fn login_then_run(
                         crate::persist::load_wishlist(&config::wishlist_path()?),
                         Some(config::wishlist_path()?),
                     );
-                    return event_loop(terminal, &mut input, app, events).await;
+                    app.background = background;
+                    return event_loop(terminal, &mut input, host, app, events).await;
                 }
                 Err(e) => {
                     tracing::warn!(%e, "login failed");
@@ -137,8 +184,13 @@ async fn login_then_run(
             Screen::Form => login::render(f, &form, &config_path),
             Screen::Splash(error) => login::render_splash(f, &cfg.username, error.as_deref()),
         })?;
-        let Some(key) = next_key(&mut input).await? else {
-            return Ok(());
+        let key = match next_input(&mut input).await? {
+            Next::Key(key) => key,
+            Next::Redraw => {
+                terminal.clear()?;
+                continue;
+            }
+            Next::End => return Ok(()),
         };
         match screen {
             Screen::Form => match form.on_key(key) {
@@ -167,21 +219,33 @@ fn is_quit(key: KeyEvent) -> bool {
         || (key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c'))
 }
 
-async fn event_loop(
-    terminal: &mut ratatui::DefaultTerminal,
-    input: &mut EventStream,
+async fn event_loop<B>(
+    terminal: &mut Terminal<B>,
+    input: &mut InputStream,
+    host: &mut dyn Host,
     mut app: App,
     mut events: mpsc::UnboundedReceiver<Event>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<()>
+where
+    B: Backend,
+    B::Error: Send + Sync + 'static,
+{
     let mut tick = tokio::time::interval(TICK);
     let mut client_alive = true;
 
     while !app.quit {
         terminal.draw(|frame| ui::render(frame, &mut app))?;
         tokio::select! {
-            key = next_key(input) => match key? {
-                Some(key) => app.on_key(key),
-                None => break,
+            next = next_input(input) => match next? {
+                Next::Key(key) => {
+                    app.on_key(key);
+                    if app.detach {
+                        app.detach = false;
+                        host.detach();
+                    }
+                }
+                Next::Redraw => terminal.clear()?,
+                Next::End => break,
             },
             event = events.recv(), if client_alive => match event {
                 Some(event) => {

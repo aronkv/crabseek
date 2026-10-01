@@ -83,6 +83,12 @@ enum Command {
     /// Check automatic port forwarding (UPnP): open the listen port on the
     /// router, report, and close it again.
     Portmap,
+    /// Quit crabseek running in the background.
+    Stop,
+    /// Run in the background (started by `crabseek` in background mode or a
+    /// systemd user service); `crabseek` attaches to it.
+    #[command(hide = true)]
+    Daemon,
     /// Forget the saved username and password.
     Logout,
     /// Print the config file location.
@@ -98,6 +104,9 @@ async fn main() -> anyhow::Result<()> {
     let Some(command) = cli.command else {
         return run_tui().await;
     };
+    if let Command::Daemon = command {
+        return run_daemon().await;
+    }
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .with_writer(std::io::stderr)
@@ -176,6 +185,17 @@ async fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Command::Stop => {
+            if tui::remote::stop().await? {
+                println!("crabseek stopped");
+            } else {
+                println!("crabseek is not running in the background");
+            }
+            Ok(())
+        }
+        Command::Daemon => {
+            unreachable!("handled before logging is set up")
+        }
         Command::Logout => {
             if config::clear_credentials()? {
                 println!("logged out; run `crabseek` to log in again");
@@ -192,7 +212,29 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// The TUI owns the terminal, so logs go to a file instead.
+/// `crabseek` without a subcommand: attach to the background process if
+/// one runs; otherwise start one (background mode) or run right here.
 async fn run_tui() -> anyhow::Result<()> {
+    if tui::remote::is_running() {
+        return tui::remote::attach().await;
+    }
+    let cfg = config::load_or_default()?;
+    if cfg.background {
+        tui::remote::spawn_daemon()?;
+        tui::remote::wait_until_running().await?;
+        return tui::remote::attach().await;
+    }
+    init_file_logging()?;
+    tui::run(cfg).await
+}
+
+async fn run_daemon() -> anyhow::Result<()> {
+    init_file_logging()?;
+    tui::remote::run_daemon(config::load_or_default()?).await
+}
+
+/// The UI owns the terminal, so logs go to a file instead.
+fn init_file_logging() -> anyhow::Result<()> {
     let log_path = config::log_path()?;
     if let Some(dir) = log_path.parent() {
         std::fs::create_dir_all(dir)?;
@@ -205,8 +247,7 @@ async fn run_tui() -> anyhow::Result<()> {
         .with_ansi(false)
         .with_writer(std::sync::Mutex::new(log))
         .init();
-
-    tui::run(config::load_or_default()?).await
+    Ok(())
 }
 
 fn shares(query: Option<String>, dirs: Vec<std::path::PathBuf>) -> anyhow::Result<()> {
@@ -335,6 +376,10 @@ async fn login(listen_secs: u64) -> anyhow::Result<()> {
 }
 
 async fn start_client() -> anyhow::Result<(Client, mpsc::UnboundedReceiver<Event>)> {
+    if tui::remote::is_running() {
+        // A second login would throw the background one off the server.
+        anyhow::bail!("crabseek is running in the background; stop it first with `crabseek stop`");
+    }
     let cfg = config::load()?;
     println!(
         "logging in as {} (listening on port {})",

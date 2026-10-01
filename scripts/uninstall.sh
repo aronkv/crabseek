@@ -10,9 +10,17 @@ set -eu
 PREFIX="${PREFIX:-$HOME/.local}"
 CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/crabseek"
 
+# Stop it if it runs in the background, and drop the systemd user unit.
+"$PREFIX/bin/crabseek" stop >/dev/null 2>&1 || true
+UNIT="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/crabseek.service"
+if [ -e "$UNIT" ] && command -v systemctl >/dev/null 2>&1; then
+    systemctl --user disable --now crabseek >/dev/null 2>&1 || true
+fi
+
 targets=""
 for path in \
     "$PREFIX/bin/crabseek" \
+    "$UNIT" \
     "$CONFIG" \
     "${XDG_DATA_HOME:-$HOME/.local/share}/crabseek" \
     "${XDG_STATE_HOME:-$HOME/.local/state}/crabseek" \
