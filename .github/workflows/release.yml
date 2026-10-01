@@ -1,0 +1,42 @@
+name: Release
+
+# Builds the prebuilt x86_64 binary for a tag and attaches it to the
+# GitHub release. Built on Ubuntu 22.04 (glibc 2.35), so it also runs on
+# distributions older than Arch.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to (re)build the release assets for"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  binary:
+    runs-on: ubuntu-22.04
+    env:
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release --locked
+      - run: cargo test --release --locked
+      - name: Package and upload
+        run: |
+          VERSION="${TAG#v}"
+          NAME="crabseek-$VERSION-x86_64-linux"
+          mkdir "$NAME"
+          cp target/release/crabseek LICENSE README.md "$NAME/"
+          cp packaging/systemd/crabseek.service "$NAME/crabseek.service.in"
+          tar -czf "$NAME.tar.gz" "$NAME"
+          sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "crabseek $VERSION" --generate-notes
+          gh release upload "$TAG" "$NAME.tar.gz" "$NAME.tar.gz.sha256" --clobber
