@@ -149,7 +149,7 @@ fn render_search(frame: &mut Frame, app: &mut App, area: Rect) {
     } else if app.search.is_some() {
         "waiting for results..."
     } else {
-        "type a query and press Enter"
+        "press s or / to search"
     };
     render_result_list(
         frame,
@@ -652,12 +652,14 @@ fn render_buddies(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn help_line(app: &App) -> &'static str {
     match (app.tab, app.focus) {
-        (Tab::Search, Focus::Input) => " Enter search · Esc results · Ctrl-u clear · Ctrl-c quit",
+        (Tab::Search, Focus::Input) => {
+            " Enter search · Esc/Alt-s results · Ctrl-u clear · Ctrl-c quit"
+        }
         (Tab::Search, Focus::List) => {
-            " 10j/10k jump · j/k move · Enter open folder · h/l collapse/expand · d download · b browse user · A add buddy · f/F format filter · / search · Tab/Alt-1…6 tabs · q quit"
+            " 10j/10k jump · j/k move · Enter open folder · h/l collapse/expand · d download · b browse user · A add buddy · f/F format filter · s search · Tab/Alt-1…6 tabs · q quit"
         }
         (Tab::Transfers, _) => {
-            " j/k move · c cancel · r retry failed · x clear finished · A add buddy · / search · Tab/Alt-1…6 tabs · q quit"
+            " j/k move · c cancel · r retry failed · x clear finished · A add buddy · s search · Tab/Alt-1…6 tabs · q quit"
         }
         (Tab::Browse, _) if app.browse_focus == Focus::Input => {
             " Enter browse user · Esc list · Ctrl-u clear · Ctrl-c quit"
@@ -666,19 +668,19 @@ fn help_line(app: &App) -> &'static str {
             " j/k move · Enter open folder · d download · A add buddy · f/F format filter · / other user · Tab/Alt-1…6 tabs · q quit"
         }
         (Tab::Uploads, _) => {
-            " j/k move · c cancel · x clear finished · A add buddy · / search · Tab/Alt-1…6 tabs · q quit"
+            " j/k move · c cancel · x clear finished · A add buddy · s search · Tab/Alt-1…6 tabs · q quit"
         }
         (Tab::Settings, _) if app.settings.is_editing() => {
             " Tab complete folder · Enter save · Esc cancel · Ctrl-u clear"
         }
         (Tab::Settings, _) => {
-            " j/k move · Enter edit/toggle · a add shared folder · x remove · / search · Tab/Alt-1…6 tabs · q quit"
+            " j/k move · Enter edit/toggle · a add shared folder · x remove · s search · Tab/Alt-1…6 tabs · q quit"
         }
         (Tab::Buddies, _) if app.buddies.adding.is_some() => {
             " Enter add buddy · Esc cancel · Ctrl-u clear · Ctrl-c quit"
         }
         (Tab::Buddies, _) => {
-            " j/k move · a add buddy · x remove · Enter/b browse shares · / search · Tab/Alt-1…6 tabs · q quit"
+            " j/k move · a add buddy · x remove · Enter/b browse shares · s search · Tab/Alt-1…6 tabs · q quit"
         }
     }
 }

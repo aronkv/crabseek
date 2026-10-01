@@ -508,6 +508,46 @@ mod tests {
     }
 
     #[test]
+    fn search_box_keys() {
+        use crossterm::event::KeyModifiers;
+        let alt_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::ALT);
+        let mut app = App::new(
+            Client::offline(),
+            "me".into(),
+            &Config::default(),
+            vec![],
+            None,
+        )
+        .unwrap();
+        // Starts in the list, so keys are commands, not text.
+        assert_eq!((app.tab, app.focus), (Tab::Search, Focus::List));
+        assert!(draw(&mut app).contains("press s or / to search"));
+        app.on_key(KeyEvent::from(KeyCode::Char('s')));
+        assert_eq!(app.focus, Focus::Input);
+        // Inside the box `s` is just a letter; Alt-s goes back.
+        app.on_key(KeyEvent::from(KeyCode::Char('s')));
+        assert_eq!(app.input, "s");
+        app.on_key(alt_s);
+        assert_eq!(app.focus, Focus::List);
+        assert_eq!(app.input, "s");
+
+        // Alt-s and `/` open the search from other tabs, even from a
+        // text box there.
+        app.on_key(KeyEvent::from(KeyCode::F(6)));
+        app.on_key(KeyEvent::from(KeyCode::Char('a')));
+        app.on_key(alt_s);
+        assert_eq!((app.tab, app.focus), (Tab::Search, Focus::Input));
+        app.on_key(KeyEvent::from(KeyCode::Esc));
+        app.on_key(KeyEvent::from(KeyCode::F(2)));
+        app.on_key(KeyEvent::from(KeyCode::Char('/')));
+        assert_eq!((app.tab, app.focus), (Tab::Search, Focus::Input));
+
+        app.on_key(KeyEvent::from(KeyCode::Esc));
+        app.on_key(KeyEvent::from(KeyCode::Char('q')));
+        assert!(app.quit);
+    }
+
+    #[test]
     fn download_key_on_offline_client_reports_error() {
         let mut app = app_with_results();
         app.on_key(KeyEvent::from(KeyCode::Char('d')));

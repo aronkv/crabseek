@@ -22,7 +22,7 @@
 │▸ Tomorrow's Harvest  (17)            FLAC 24/44.1 ~1914kbps  643.5 MB  bob   free 12.1 MB/s│
 │▸ Music Has the Right to Children (19) MP3 320kbps            151.2 MB  carol  queue 2      │
 └────────────────────────────────────────────────────────────────────────────────────────────┘
- 10j/10k jump · Enter open folder · d download · f/F format filter · / search · Tab/Alt-1…4 tabs
+ 10j/10k jump · Enter open folder · d download · f/F format filter · s search · Tab/Alt-1…6 tabs
 ```
 
 seekr speaks the Soulseek protocol natively. There is no daemon, web UI or Python runtime:
@@ -139,14 +139,15 @@ Without this, you can still download from peers that are reachable themselves.
 
 | Where | Key | Action |
 |---|---|---|
-| everywhere | `/` | focus the search box |
+| everywhere | `s`, `/` | open the search box (seekr starts in the results list) |
+| | `Alt-s` | toggle between the search box and the results, also while typing |
 | | `Tab`, `Alt-1`–`6`, `F1`–`F6` | switch between Search, Downloads, Uploads, Settings, Browse and Buddies |
 | | `A` | add the user of the selected result, download or upload as a buddy |
 | | `q`, `Ctrl-c` | quit (`q` asks again while transfers are running) |
 | lists | `10j`, `10k`, `10↑` … | vim-style counts: move 10 rows (the count shows bottom left) |
 | | `5G` | jump to row 5 |
 | search box | `Enter` | search |
-| | `Esc` | back to the results |
+| | `Esc`, `Alt-s` | back to the results |
 | | `Ctrl-u` | clear |
 | results | `j`/`k`, `↓`/`↑`, `PgUp`/`PgDn`, `g`/`G` | move |
 | | `Enter`, `Space` | open or close a folder |

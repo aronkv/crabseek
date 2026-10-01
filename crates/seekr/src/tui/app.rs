@@ -134,7 +134,9 @@ impl App {
             client,
             username,
             tab: Tab::Search,
-            focus: Focus::Input,
+            // Start in the list so every key works right away; `s`, `/`
+            // or `Alt-s` open the search box.
+            focus: Focus::List,
             input: String::new(),
             search: None,
             results: Results::default(),
@@ -391,6 +393,17 @@ impl App {
         if key.code != KeyCode::Char('q') {
             self.confirm_quit = false;
         }
+        // `Alt-s` types nothing, so it toggles the search box from
+        // anywhere, even while typing in it.
+        if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::ALT) {
+            self.count = None;
+            if self.tab == Tab::Search && self.focus == Focus::Input {
+                self.focus = Focus::List;
+            } else {
+                self.open_search();
+            }
+            return;
+        }
 
         if self.focus == Focus::Input && self.tab == Tab::Search {
             self.on_input_key(key);
@@ -439,12 +452,10 @@ impl App {
                     self.add_buddy(&user);
                 }
             }
-            // `/` edits the input of the current tab, or starts a search.
+            // `/` edits the input of the current tab, or starts a search;
+            // `s` always starts a search.
             KeyCode::Char('/') if self.tab == Tab::Browse => self.browse_focus = Focus::Input,
-            KeyCode::Char('/') => {
-                self.tab = Tab::Search;
-                self.focus = Focus::Input;
-            }
+            KeyCode::Char('/' | 's') => self.open_search(),
             _ => match self.tab {
                 Tab::Search => self.on_results_key(key, count, Which::Search),
                 Tab::Browse => self.on_results_key(key, count, Which::Browse),
@@ -470,6 +481,11 @@ impl App {
         if self.tab == Tab::Buddies && tab_before != Tab::Buddies {
             self.refresh_buddy_stats();
         }
+    }
+
+    fn open_search(&mut self) {
+        self.tab = Tab::Search;
+        self.focus = Focus::Input;
     }
 
     fn on_buddies_key(&mut self, key: KeyEvent, count: Option<usize>) {
