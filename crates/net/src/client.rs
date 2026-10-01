@@ -42,6 +42,13 @@ pub use uploads::{UploadId, UploadState};
 /// produced a connection by then.
 const PENDING_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Indirect requests (peers asking us to connect to them) we try at once.
+/// A popular search makes hundreds of firewalled peers ask within seconds;
+/// each attempt holds a socket for up to the connect timeout, which would
+/// run into the open-file limit (often 1024 under systemd). The rest are
+/// declined right away.
+const MAX_PIERCES: usize = 128;
+
 /// The spec allows at most one `ServerPing` a minute.
 const PING_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -241,6 +248,7 @@ impl Client {
                 upload_speed: 0,
                 distrib: Distrib::default(),
                 portmap_task: None,
+                pierces: 0,
             }
             .run(rx),
         );
@@ -614,6 +622,8 @@ struct Actor {
     distrib: Distrib,
     /// Keeps the UPnP mapping renewed while UPnP is on.
     portmap_task: Option<tokio::task::AbortHandle>,
+    /// Indirect connection attempts in flight (see [`MAX_PIERCES`]).
+    pierces: usize,
 }
 
 impl Actor {
@@ -705,14 +715,11 @@ impl Actor {
                     conn_type,
                     token,
                     result,
-                } => match result {
-                    Ok(stream) => self.on_remote_connection(username, conn_type, stream),
-                    Err(e) => {
-                        tracing::debug!(%username, %e, "could not answer indirect request");
-                        self.send_server(ServerRequest::CantConnectToPeer { token, username })
-                            .await;
-                    }
-                },
+                } => {
+                    self.pierces = self.pierces.saturating_sub(1);
+                    self.on_pierce_done(username, conn_type, token, result)
+                        .await
+                }
                 Internal::PendingTimeout { token } => {
                     if self.pending.contains_key(&token) {
                         self.fail(token, "timed out".to_owned());
@@ -894,6 +901,23 @@ impl Actor {
         )
     }
 
+    async fn on_pierce_done(
+        &mut self,
+        username: String,
+        conn_type: ConnectionType,
+        token: u32,
+        result: io::Result<TcpStream>,
+    ) {
+        match result {
+            Ok(stream) => self.on_remote_connection(username, conn_type, stream),
+            Err(e) => {
+                tracing::debug!(%username, %e, "could not answer indirect request");
+                self.send_server(ServerRequest::CantConnectToPeer { token, username })
+                    .await;
+            }
+        }
+    }
+
     async fn on_server(&mut self, resp: ServerResponse) {
         match resp {
             ServerResponse::PeerAddress { username, ip, port } => {
@@ -922,6 +946,13 @@ impl Actor {
                 token,
                 ..
             } => {
+                if self.pierces >= MAX_PIERCES {
+                    tracing::debug!(%username, "too many indirect requests at once; declining");
+                    self.send_server(ServerRequest::CantConnectToPeer { token, username })
+                        .await;
+                    return;
+                }
+                self.pierces += 1;
                 let addrs = self.peer_addrs(ip, port);
                 let tx = self.internal.clone();
                 tokio::spawn(async move {

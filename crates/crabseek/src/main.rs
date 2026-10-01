@@ -97,6 +97,7 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    raise_open_file_limit();
     let cli = Cli::parse();
     for moved in config::migrate_from_seekr()? {
         eprintln!("moved {moved} (seekr is now called crabseek)");
@@ -212,6 +213,23 @@ async fn main() -> anyhow::Result<()> {
 }
 
 /// The TUI owns the terminal, so logs go to a file instead.
+/// Peers, transfers and indirect connection attempts each hold a socket;
+/// the default soft limit is often 1024 (notably under systemd), while the
+/// hard limit allows far more. Raise the soft limit, as Go programs do.
+fn raise_open_file_limit() {
+    const WANTED: libc::rlim_t = 65_536;
+    unsafe {
+        let mut limit = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        if libc::getrlimit(libc::RLIMIT_NOFILE, &mut limit) == 0 && limit.rlim_cur < WANTED {
+            limit.rlim_cur = WANTED.min(limit.rlim_max);
+            libc::setrlimit(libc::RLIMIT_NOFILE, &limit);
+        }
+    }
+}
+
 /// `crabseek` without a subcommand: attach to the background process if
 /// one runs; otherwise start one (background mode) or run right here.
 async fn run_tui() -> anyhow::Result<()> {
@@ -515,5 +533,37 @@ async fn online(secs: u64) -> anyhow::Result<()> {
                 _ => return Ok(()),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn open_file_limit_is_raised() {
+        let get = || unsafe {
+            let mut l = libc::rlimit {
+                rlim_cur: 0,
+                rlim_max: 0,
+            };
+            libc::getrlimit(libc::RLIMIT_NOFILE, &mut l);
+            l
+        };
+        let original = get();
+        if original.rlim_max <= 1024 {
+            return; // nothing to raise to on this machine
+        }
+        unsafe {
+            libc::setrlimit(
+                libc::RLIMIT_NOFILE,
+                &libc::rlimit {
+                    rlim_cur: 1024,
+                    rlim_max: original.rlim_max,
+                },
+            );
+        }
+        super::raise_open_file_limit();
+        let raised = get().rlim_cur;
+        unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &original) };
+        assert!(raised > 1024, "soft limit stayed at {raised}");
     }
 }

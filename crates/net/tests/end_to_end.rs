@@ -46,6 +46,9 @@ struct Opts {
     embed_searches: bool,
     /// Report every MessageAcked id here.
     acks: Option<mpsc::UnboundedSender<u32>>,
+    /// Right after login, ask the client this many times to connect to an
+    /// address that never answers, and report each CantConnectToPeer.
+    flood: Option<(usize, mpsc::UnboundedSender<u32>)>,
 }
 
 fn frame(code: u32, body: impl FnOnce(&mut BytesMut)) -> Vec<u8> {
@@ -198,6 +201,28 @@ async fn serve(stream: TcpStream, sessions: Sessions, watchers: Watchers, opts: 
             2 => {
                 let port = r.u32().unwrap();
                 sessions.lock().unwrap().get_mut(&me).unwrap().port = port;
+                if let Some((count, _)) = &opts.flood {
+                    for i in 0..*count as u32 {
+                        tx.send(frame(18, |b| {
+                            b.put_string_wire(&format!("firewalled{i}"));
+                            b.put_string_wire("P");
+                            // TEST-NET-1: connecting there just hangs.
+                            b.put_ipv4_wire(Ipv4Addr::new(192, 0, 2, 1));
+                            b.put_u32_le(9);
+                            b.put_u32_le(i);
+                            b.put_bool_wire(false);
+                            b.put_u32_le(0);
+                            b.put_u32_le(0);
+                        }))
+                        .unwrap();
+                    }
+                }
+            }
+            // CantConnectToPeer
+            1001 => {
+                if let Some((_, declined)) = &opts.flood {
+                    let _ = declined.send(r.u32().unwrap());
+                }
             }
             // GetPeerAddress
             3 => {
@@ -777,5 +802,36 @@ async fn private_message_is_delivered_and_acked() {
         .await
         .unwrap();
     assert_eq!(ack, Some(4242));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// A burst of indirect requests must not open a socket each: past the cap,
+/// the client declines at once instead of piling up hanging connects.
+#[tokio::test]
+async fn indirect_request_burst_is_capped() {
+    const BURST: usize = 300;
+    const CAP: usize = 128; // MAX_PIERCES in client.rs
+    let root = temp_dir("flood");
+    let (declined_tx, mut declined) = mpsc::unbounded_channel();
+    let server = fake_server_with(Opts {
+        flood: Some((BURST, declined_tx)),
+        ..Opts::default()
+    })
+    .await;
+    let (_alice, _events) = start(&server, "alice", &root.join("a"), vec![]).await;
+
+    let mut count = 0;
+    let _ = tokio::time::timeout(Duration::from_millis(1500), async {
+        while declined.recv().await.is_some() {
+            count += 1;
+        }
+    })
+    .await;
+    // Where the address fails fast instead of hanging, everything is
+    // declined quickly, which is fine too.
+    assert!(
+        count >= BURST - CAP,
+        "only {count} of {BURST} declined quickly; the rest are holding sockets"
+    );
     std::fs::remove_dir_all(root).unwrap();
 }
