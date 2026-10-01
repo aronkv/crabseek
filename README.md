@@ -76,6 +76,18 @@ you type `crabseek`, search, and download whole albums in a few keystrokes.
 
 ## Installation
 
+### Quick install (x86_64 Linux)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/DarkAaronfox/crabseek/main/scripts/get.sh | sh
+```
+
+This downloads the latest prebuilt release, checks its SHA-256 sum and installs it to
+`~/.local/bin` (glibc 2.35+, which covers current Arch, Fedora, Debian 12 and Ubuntu
+22.04 and newer). Read the script first if you like:
+[`scripts/get.sh`](scripts/get.sh). To remove crabseek again:
+`curl -fsSL https://raw.githubusercontent.com/DarkAaronfox/crabseek/main/scripts/get.sh | sh -s -- --uninstall`.
+
 ### From source
 
 You need a Rust toolchain (1.88 or newer). On Arch/CachyOS: `sudo pacman -S rustup && rustup default stable`.
@@ -115,8 +127,8 @@ the binary and the script for the rest.
 
 ### AUR
 
-An AUR package is planned once crabseek is stable. The draft lives in
-[`packaging/aur/PKGBUILD`](packaging/aur/PKGBUILD).
+The AUR package is ready ([`packaging/aur`](packaging/aur)) and goes up as soon as
+AUR account registration reopens.
 
 ## First run
 
