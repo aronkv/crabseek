@@ -1,9 +1,9 @@
 //! An established `P` connection: one reader task, one writer task.
 
 use bytes::BytesMut;
+use crabseek_proto::FrameCodec;
+use crabseek_proto::peer::PeerMsg;
 use futures::StreamExt;
-use seekr_proto::FrameCodec;
-use seekr_proto::peer::PeerMsg;
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;

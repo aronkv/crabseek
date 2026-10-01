@@ -2,7 +2,7 @@
 //! reach us without manual port forwarding.
 //!
 //! Mappings get a one-hour lease and are renewed every 30 minutes, so a
-//! crashed seekr does not leave a stale rule on the router for long.
+//! crashed crabseek does not leave a stale rule on the router for long.
 
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, UdpSocket};
 use std::time::Duration;
@@ -14,7 +14,7 @@ use igd_next::{AddPortError, PortMappingProtocol, SearchOptions};
 pub const LEASE: Duration = Duration::from_secs(60 * 60);
 pub const RENEW_EVERY: Duration = Duration::from_secs(30 * 60);
 const SEARCH_TIMEOUT: Duration = Duration::from_secs(4);
-const DESCRIPTION: &str = "seekr (Soulseek)";
+const DESCRIPTION: &str = "crabseek (Soulseek)";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PortMapping {

@@ -15,11 +15,11 @@ mod wishlist;
 
 use std::time::Duration;
 
+use crabseek_net::{Client, Event};
 use crossterm::event::{
     Event as TermEvent, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
 };
 use futures::StreamExt;
-use seekr_net::{Client, Event};
 use tokio::sync::mpsc;
 
 use crate::config::{self, Config};
@@ -207,11 +207,11 @@ async fn event_loop(
 mod tests {
     use std::path::PathBuf;
 
+    use crabseek_net::DownloadState;
+    use crabseek_proto::search::{SearchFile, SearchResponse};
     use crossterm::event::{KeyCode, KeyEvent};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
-    use seekr_net::DownloadState;
-    use seekr_proto::search::{SearchFile, SearchResponse};
 
     use super::app::{ActiveSearch, Focus, Tab};
     use super::chat;
@@ -318,7 +318,7 @@ mod tests {
         form.failed("Wrong password for this username.".into());
         let mut terminal = Terminal::new(TestBackend::new(90, 22)).unwrap();
         terminal
-            .draw(|f| login::render(f, &form, "~/.config/seekr/config.toml"))
+            .draw(|f| login::render(f, &form, "~/.config/crabseek/config.toml"))
             .unwrap();
         let buf = terminal.backend().buffer();
         let screen: String = (0..buf.area.height)
@@ -415,7 +415,7 @@ mod tests {
 
     #[test]
     fn browse_from_search_result() {
-        use seekr_proto::shares::{SharedDirectory, SharedFileList};
+        use crabseek_proto::shares::{SharedDirectory, SharedFileList};
         let mut app = app_with_results();
         app.on_key(KeyEvent::from(KeyCode::Char('b')));
         assert_eq!(app.tab, Tab::Browse);
@@ -462,8 +462,8 @@ mod tests {
 
     #[test]
     fn buddies_tab() {
+        use crabseek_proto::server::{OnlineStatus, ServerResponse, UserStats, WatchedUser};
         use crossterm::event::KeyModifiers;
-        use seekr_proto::server::{OnlineStatus, ServerResponse, UserStats, WatchedUser};
 
         let mut app = app_with_results();
         // `A` on a search result adds its user.
@@ -566,7 +566,7 @@ mod tests {
     #[test]
     fn format_filter_survives_new_browse_and_search() {
         use super::results::FormatFilter;
-        use seekr_proto::shares::{SharedDirectory, SharedFileList};
+        use crabseek_proto::shares::{SharedDirectory, SharedFileList};
 
         let mut app = app_with_results();
         app.on_key(KeyEvent::from(KeyCode::Char('f')));

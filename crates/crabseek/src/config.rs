@@ -1,4 +1,4 @@
-//! `~/.config/seekr/config.toml`: credentials and settings.
+//! `~/.config/crabseek/config.toml`: credentials and settings.
 //!
 //! The file is written with mode 600 inside a 700 directory, the same way
 //! other Soulseek clients store the password (the protocol needs it in
@@ -10,8 +10,8 @@ use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
+use crabseek_net::ClientConfig;
 use directories::{BaseDirs, ProjectDirs, UserDirs};
-use seekr_net::ClientConfig;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -24,7 +24,7 @@ pub struct Config {
     pub server: String,
     #[serde(default = "default_port")]
     pub listen_port: u16,
-    /// Defaults to `~/Downloads/seekr`; a leading `~/` is expanded.
+    /// Defaults to `~/Downloads/crabseek`; a leading `~/` is expanded.
     download_dir: Option<PathBuf>,
     /// Folders offered to other users. Defaults to `~/Music`.
     shared_dirs: Option<Vec<PathBuf>>,
@@ -46,7 +46,7 @@ impl Default for Config {
 }
 
 fn default_server() -> String {
-    seekr_proto::server::DEFAULT_SERVER.to_owned()
+    crabseek_proto::server::DEFAULT_SERVER.to_owned()
 }
 
 fn default_port() -> u16 {
@@ -75,7 +75,7 @@ impl Config {
                     .download_dir()
                     .map(PathBuf::from)
                     .unwrap_or_else(|| dirs.home_dir().join("Downloads"));
-                Ok(downloads.join("seekr"))
+                Ok(downloads.join("crabseek"))
             }
         }
     }
@@ -120,7 +120,79 @@ pub fn expand_home(path: &Path) -> anyhow::Result<PathBuf> {
 }
 
 fn project_dirs() -> anyhow::Result<ProjectDirs> {
-    ProjectDirs::from("", "", "seekr").context("could not determine home directory")
+    ProjectDirs::from("", "", "crabseek").context("could not determine home directory")
+}
+
+/// The project was called seekr before. On the first run under the new
+/// name, its config, data, cache and state folders move over, so the
+/// login, settings, download list, buddies, wishlist and chats survive.
+/// Downloads stay where they are: a config without `download_dir` gets the
+/// old default written in.
+pub fn migrate_from_seekr() -> anyhow::Result<Vec<String>> {
+    let (Some(old), Ok(new)) = (ProjectDirs::from("", "", "seekr"), project_dirs()) else {
+        return Ok(Vec::new());
+    };
+    let pairs = [
+        (old.config_dir(), new.config_dir()),
+        (old.data_dir(), new.data_dir()),
+        (old.cache_dir(), new.cache_dir()),
+        (
+            old.state_dir().unwrap_or(old.cache_dir()),
+            new.state_dir().unwrap_or(new.cache_dir()),
+        ),
+    ];
+    let pairs: Vec<(PathBuf, PathBuf)> = pairs
+        .into_iter()
+        .map(|(a, b)| (a.to_owned(), b.to_owned()))
+        .collect();
+    let downloads = UserDirs::new().map(|u| {
+        u.download_dir()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| u.home_dir().join("Downloads"))
+    });
+    let state = new.state_dir().unwrap_or(new.cache_dir()).to_owned();
+    let moved = migrate_dirs(&pairs, new.config_dir(), downloads.as_deref())?;
+    // The log file inside the moved state folder kept its old name.
+    let _ = fs::remove_file(state.join("seekr.log"));
+    Ok(moved)
+}
+
+/// Moves each `(old, new)` folder that exists only under its old name.
+/// `config_dir` is the new config folder; `downloads` the user's Downloads.
+fn migrate_dirs(
+    pairs: &[(PathBuf, PathBuf)],
+    config_dir: &Path,
+    downloads: Option<&Path>,
+) -> anyhow::Result<Vec<String>> {
+    let mut moved = Vec::new();
+    let mut config_moved = false;
+    for (from, to) in pairs {
+        if from.is_dir() && !to.exists() {
+            if let Some(parent) = to.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::rename(from, to)
+                .with_context(|| format!("moving {} to {}", from.display(), to.display()))?;
+            moved.push(format!("{} → {}", display_path(from), display_path(to)));
+            config_moved |= to == config_dir;
+        }
+    }
+    // Keep downloads in the old default folder rather than splitting them.
+    let config = config_dir.join("config.toml");
+    if config_moved
+        && let Ok(text) = fs::read_to_string(&config)
+        && let Ok(table) = text.parse::<toml::Table>()
+        && !table.contains_key("download_dir")
+        && let Some(downloads) = downloads
+    {
+        let old_default = downloads.join("seekr");
+        if old_default.is_dir() {
+            let mut table = table;
+            table.insert("download_dir".into(), display_path(&old_default).into());
+            write_private(&config, &toml::to_string(&table)?)?;
+        }
+    }
+    Ok(moved)
 }
 
 pub fn path() -> anyhow::Result<PathBuf> {
@@ -158,7 +230,7 @@ pub fn buddies_path() -> anyhow::Result<PathBuf> {
 pub fn log_path() -> anyhow::Result<PathBuf> {
     let dirs = project_dirs()?;
     let dir = dirs.state_dir().unwrap_or_else(|| dirs.cache_dir());
-    Ok(dir.join("seekr.log"))
+    Ok(dir.join("crabseek.log"))
 }
 
 /// The config, or defaults when there is no file yet.
@@ -175,7 +247,7 @@ pub fn load_or_default() -> anyhow::Result<Config> {
 pub fn load() -> anyhow::Result<Config> {
     let cfg = load_or_default()?;
     if !cfg.has_credentials() {
-        bail!("not logged in – run `seekr` once to log in");
+        bail!("not logged in – run `crabseek` once to log in");
     }
     Ok(cfg)
 }
@@ -270,12 +342,46 @@ mod tests {
     use super::*;
 
     #[test]
+    fn migrates_old_folders_once() {
+        let base = std::env::temp_dir().join(format!("crabseek-migrate-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&base);
+        let p = |s: &str| base.join(s);
+        let pairs = vec![
+            (p("config/seekr"), p("config/crabseek")),
+            (p("share/seekr"), p("share/crabseek")),
+            (p("cache/seekr"), p("cache/crabseek")),
+        ];
+        fs::create_dir_all(p("config/seekr")).unwrap();
+        fs::write(p("config/seekr/config.toml"), "username = \"me\"\n").unwrap();
+        fs::create_dir_all(p("share/seekr")).unwrap();
+        fs::write(p("share/seekr/chats.json"), "[]").unwrap();
+        // Existing downloads in the old default folder.
+        fs::create_dir_all(p("Downloads/seekr")).unwrap();
+
+        let moved = migrate_dirs(&pairs, &p("config/crabseek"), Some(&p("Downloads"))).unwrap();
+        assert_eq!(moved.len(), 2, "{moved:?}");
+        assert!(p("share/crabseek/chats.json").exists());
+        assert!(!p("config/seekr").exists());
+        let cfg: Config =
+            toml::from_str(&fs::read_to_string(p("config/crabseek/config.toml")).unwrap()).unwrap();
+        assert_eq!(cfg.username, "me");
+        assert_eq!(cfg.download_dir().unwrap(), p("Downloads/seekr"));
+        // A second run has nothing to do.
+        assert!(
+            migrate_dirs(&pairs, &p("config/crabseek"), Some(&p("Downloads")))
+                .unwrap()
+                .is_empty()
+        );
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
     fn defaults() {
         let cfg = Config::default();
         assert_eq!(cfg.server, "server.slsknet.org:2242");
         assert_eq!(cfg.listen_port, 2234);
         assert!(!cfg.has_credentials());
-        assert!(cfg.download_dir().unwrap().ends_with("seekr"));
+        assert!(cfg.download_dir().unwrap().ends_with("crabseek"));
         assert_eq!(cfg.shared_dirs().unwrap().len(), 1);
     }
 
@@ -295,7 +401,7 @@ mod tests {
     #[test]
     fn private_write_keeps_mode() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("seekr-cfg-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("crabseek-cfg-{}", std::process::id()));
         let path = dir.join("config.toml");
         write_private(&path, "a = 1").unwrap();
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;

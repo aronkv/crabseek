@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 
-use seekr_net::{DownloadId, DownloadState};
+use crabseek_net::{DownloadId, DownloadState};
 
 use crate::persist::{SavedDownload, SavedStatus};
 

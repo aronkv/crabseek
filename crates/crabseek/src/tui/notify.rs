@@ -14,7 +14,7 @@ const BATCH_WINDOW: Duration = Duration::from_secs(3);
 pub fn send(summary: String, body: String) {
     tokio::task::spawn_blocking(move || {
         let result = notify_rust::Notification::new()
-            .appname("seekr")
+            .appname("crabseek")
             .summary(&summary)
             .body(&body)
             .icon("folder-download")
@@ -94,8 +94,8 @@ mod live {
     #[ignore]
     fn shows_on_the_desktop() {
         notify_rust::Notification::new()
-            .appname("seekr")
-            .summary("seekr")
+            .appname("crabseek")
+            .summary("crabseek")
             .body("Test notification: desktop notifications work")
             .icon("folder-download")
             .show()

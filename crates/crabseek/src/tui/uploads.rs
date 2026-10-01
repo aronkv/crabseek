@@ -1,6 +1,6 @@
 //! The upload list shown on the Uploads tab.
 
-use seekr_net::{UploadId, UploadState};
+use crabseek_net::{UploadId, UploadState};
 
 use super::transfers::{SpeedMeter, basename};
 

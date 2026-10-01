@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Builds seekr and installs it to $PREFIX/bin (default: ~/.local/bin).
+# Builds crabseek and installs it to $PREFIX/bin (default: ~/.local/bin).
 #
 #   scripts/install.sh              # install or update
 #   PREFIX=/usr/local sudo -E scripts/install.sh
@@ -7,7 +7,7 @@
 set -eu
 
 PREFIX="${PREFIX:-$HOME/.local}"
-BIN="$PREFIX/bin/seekr"
+BIN="$PREFIX/bin/crabseek"
 cd "$(dirname "$0")/.."
 
 if [ "${1:-}" = "--uninstall" ]; then
@@ -20,11 +20,19 @@ if ! command -v cargo >/dev/null 2>&1; then
 fi
 
 cargo build --release --locked
-install -Dm755 target/release/seekr "$BIN"
+install -Dm755 target/release/crabseek "$BIN"
 echo "installed $BIN"
 
+# The project used to be called seekr; remove that old binary, but only if
+# it is really ours (another project ships a program called seekr).
+OLD="$PREFIX/bin/seekr"
+if [ -x "$OLD" ] && "$OLD" --help 2>/dev/null | grep -q "Soulseek"; then
+    rm -f "$OLD"
+    echo "removed the old $OLD (seekr is now called crabseek)"
+fi
+
 case ":$PATH:" in
-    *":$PREFIX/bin:"*) echo "run it with: seekr" ;;
+    *":$PREFIX/bin:"*) echo "run it with: crabseek" ;;
     *)
         echo
         echo "note: $PREFIX/bin is not on your PATH yet. Add it, e.g.:"

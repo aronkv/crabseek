@@ -11,11 +11,11 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use crabseek_proto::search::{SearchFile, attr};
+use crabseek_proto::shares::{SharedDirectory, SharedFileList};
 use lofty::config::ParseOptions;
 use lofty::file::AudioFile;
 use lofty::probe::Probe;
-use seekr_proto::search::{SearchFile, attr};
-use seekr_proto::shares::{SharedDirectory, SharedFileList};
 use serde::{Deserialize, Serialize};
 
 /// At most this many results per search, like Nicotine+'s default.
@@ -355,7 +355,8 @@ mod tests {
     use super::*;
 
     fn tree(name: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("seekr-shares-{name}-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("crabseek-shares-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         let music = root.join("Music");
         for (path, contents) in [

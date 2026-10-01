@@ -1,5 +1,5 @@
 [package]
-name = "seekr-proto"
+name = "crabseek-proto"
 description = "Soulseek protocol messages (encoding and decoding, no I/O)"
 version.workspace = true
 edition.workspace = true

@@ -3,11 +3,11 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
+use crabseek_net::{Client, DistribStatus, DownloadState, Event, PortMapStatus};
+use crabseek_proto::search::{SearchFile, SearchResponse};
+use crabseek_proto::server::ServerResponse;
+use crabseek_proto::shares::SharedFileList;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use seekr_net::{Client, DistribStatus, DownloadState, Event, PortMapStatus};
-use seekr_proto::search::{SearchFile, SearchResponse};
-use seekr_proto::server::ServerResponse;
-use seekr_proto::shares::SharedFileList;
 
 use super::buddies::Buddies;
 use super::chat::{self, ChatInput, Chats};
@@ -852,7 +852,7 @@ impl App {
                 config::save_notifications(enabled).map(|()| {
                     if enabled {
                         notify::send(
-                            "seekr".to_owned(),
+                            "crabseek".to_owned(),
                             "Desktop notifications are on".to_owned(),
                         );
                         "desktop notifications on".to_owned()

@@ -1,13 +1,13 @@
 //! Rendering. Only the visible rows of each list are built, so large
 //! result sets stay cheap to draw.
 
+use crabseek_net::{DistribStatus, DownloadState, PortMapStatus, UploadState};
+use crabseek_proto::server::OnlineStatus;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Paragraph, Row as TableRow, Table, TableState, Tabs, Wrap};
-use seekr_net::{DistribStatus, DownloadState, PortMapStatus, UploadState};
-use seekr_proto::server::OnlineStatus;
 
 use super::app::{App, Focus, SharesStatus, Tab};
 use super::buddies::Known;
@@ -803,7 +803,7 @@ fn render_wishlist(frame: &mut Frame, app: &mut App, area: Rect) {
         frame.render_widget(
             Paragraph::new(
                 "The wishlist keeps searching for you in the background: the server allows one \
-                 search every 12 minutes, and seekr runs your wishes in turn, telling you when \
+                 search every 12 minutes, and crabseek runs your wishes in turn, telling you when \
                  new files turn up. Press a to add a wish, or w on a search's results. \
                  ? explains more.",
             )

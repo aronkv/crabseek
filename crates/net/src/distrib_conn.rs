@@ -1,9 +1,9 @@
 //! A `D` connection to a (possible) distributed parent. We only read from
 //! it: as a child we receive searches and branch information.
 
+use crabseek_proto::FrameCodec;
+use crabseek_proto::distrib::DistribMsg;
 use futures::StreamExt;
-use seekr_proto::FrameCodec;
-use seekr_proto::distrib::DistribMsg;
 use tokio::net::TcpStream;
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::sync::mpsc;

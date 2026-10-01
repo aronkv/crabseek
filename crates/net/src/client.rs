@@ -15,13 +15,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 
-use seekr_proto::ConnectionType;
-use seekr_proto::distrib::DistribMsg;
-use seekr_proto::peer::{PeerMsg, UserInfo};
-use seekr_proto::peer_init::PeerInitMsg;
-use seekr_proto::search::SearchResponse;
-use seekr_proto::server::{ServerRequest, ServerResponse};
-use seekr_proto::shares::SharedFileList;
+use crabseek_proto::ConnectionType;
+use crabseek_proto::distrib::DistribMsg;
+use crabseek_proto::peer::{PeerMsg, UserInfo};
+use crabseek_proto::peer_init::PeerInitMsg;
+use crabseek_proto::search::SearchResponse;
+use crabseek_proto::server::{ServerRequest, ServerResponse};
+use crabseek_proto::shares::SharedFileList;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 
@@ -1101,7 +1101,7 @@ impl Actor {
 impl Actor {
     fn own_user_info(&self) -> UserInfo {
         UserInfo {
-            description: "seekr – Soulseek client in Rust".to_owned(),
+            description: "crabseek – Soulseek client in Rust".to_owned(),
             picture: None,
             total_uploads: self.uploads.values().filter(|u| u.is_completed()).count() as u32,
             queue_size: self.upload_queue_len() as u32,

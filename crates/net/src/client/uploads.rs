@@ -10,9 +10,9 @@ use std::io;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use seekr_proto::ConnectionType;
-use seekr_proto::peer::{PeerMsg, TransferDirection};
-use seekr_proto::server::ServerRequest;
+use crabseek_proto::ConnectionType;
+use crabseek_proto::peer::{PeerMsg, TransferDirection};
+use crabseek_proto::server::ServerRequest;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -463,7 +463,7 @@ mod tests {
 
     #[tokio::test]
     async fn sends_from_offset() {
-        let dir = std::env::temp_dir().join(format!("seekr-upload-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("crabseek-upload-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("song.flac");
         let data: Vec<u8> = (0..200_000u32).map(|i| (i * 3) as u8).collect();

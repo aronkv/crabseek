@@ -12,8 +12,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::{BufMut, BytesMut};
-use seekr_net::{Client, ClientConfig, ConnectMethod, DownloadState, Event, UploadState};
-use seekr_proto::wire::{Reader, WireWrite};
+use crabseek_net::{Client, ClientConfig, ConnectMethod, DownloadState, Event, UploadState};
+use crabseek_proto::wire::{Reader, WireWrite};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
@@ -313,7 +313,7 @@ async fn free_port() -> u16 {
 }
 
 fn temp_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("seekr-e2e-{name}-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("crabseek-e2e-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir
@@ -654,7 +654,7 @@ async fn listen_port_change_keeps_us_reachable() {
 /// asks for her stats once she has scanned her shares.
 #[tokio::test]
 async fn watch_user_status_and_stats() {
-    use seekr_proto::server::{OnlineStatus, ServerResponse, UserStats};
+    use crabseek_proto::server::{OnlineStatus, ServerResponse, UserStats};
 
     let root = temp_dir("watch");
     let share = root.join("Music");

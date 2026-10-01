@@ -1,7 +1,7 @@
 //! The buddy list on the Buddies tab: users we watch on the server, with
 //! their status and share stats. Online buddies come first.
 
-use seekr_proto::server::{OnlineStatus, UserStats, WatchedUser};
+use crabseek_proto::server::{OnlineStatus, UserStats, WatchedUser};
 
 pub struct Buddy {
     pub username: String,

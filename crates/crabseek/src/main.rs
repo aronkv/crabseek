@@ -7,9 +7,9 @@ mod tui;
 use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use seekr_net::{Client, Event, ServerConnection};
-use seekr_proto::peer::PeerMsg;
-use seekr_proto::server::{ServerRequest, ServerResponse};
+use crabseek_net::{Client, Event, ServerConnection};
+use crabseek_proto::peer::PeerMsg;
+use crabseek_proto::server::{ServerRequest, ServerResponse};
 use tokio::sync::mpsc;
 
 #[derive(Parser)]
@@ -91,7 +91,11 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let Some(command) = Cli::parse().command else {
+    let cli = Cli::parse();
+    for moved in config::migrate_from_seekr()? {
+        eprintln!("moved {moved} (seekr is now called crabseek)");
+    }
+    let Some(command) = cli.command else {
         return run_tui().await;
     };
     tracing_subscriber::fmt()
@@ -153,7 +157,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Portmap => {
             let port = config::load_or_default()?.listen_port;
             println!("asking the router to open TCP port {port}...");
-            match seekr_net::portmap::map(port).await {
+            match crabseek_net::portmap::map(port).await {
                 Ok(m) => {
                     if m.already_mapped {
                         println!("the router already has a rule for port {port} (manual forward?)");
@@ -164,7 +168,7 @@ async fn main() -> anyhow::Result<()> {
                         println!("router's public address: {ip}");
                     }
                     if !m.already_mapped {
-                        seekr_net::portmap::unmap(port).await;
+                        crabseek_net::portmap::unmap(port).await;
                         println!("removed the test mapping again");
                     }
                 }
@@ -174,7 +178,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Logout => {
             if config::clear_credentials()? {
-                println!("logged out; run `seekr` to log in again");
+                println!("logged out; run `crabseek` to log in again");
             } else {
                 println!("not logged in");
             }
@@ -195,7 +199,7 @@ async fn run_tui() -> anyhow::Result<()> {
     }
     let log = std::fs::File::create(&log_path)?;
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| "seekr=info,seekr_net=info".into());
+        .unwrap_or_else(|_| "crabseek=info,crabseek_net=info".into());
     tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_ansi(false)
@@ -206,7 +210,7 @@ async fn run_tui() -> anyhow::Result<()> {
 }
 
 fn shares(query: Option<String>, dirs: Vec<std::path::PathBuf>) -> anyhow::Result<()> {
-    use seekr_net::shares::{MAX_SEARCH_RESULTS, MetadataCache, ShareIndex};
+    use crabseek_net::shares::{MAX_SEARCH_RESULTS, MetadataCache, ShareIndex};
 
     let cfg = config::load_or_default()?;
     let dirs = if dirs.is_empty() {

@@ -1,10 +1,10 @@
-//! `seekr download`: queue one file and show its progress until it
+//! `crabseek download`: queue one file and show its progress until it
 //! finishes.
 
 use std::io::Write;
 use std::time::Instant;
 
-use seekr_net::{Client, DownloadState, Event};
+use crabseek_net::{Client, DownloadState, Event};
 use tokio::sync::mpsc;
 
 use crate::search::human_size;

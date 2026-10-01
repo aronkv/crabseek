@@ -1,4 +1,4 @@
-//! The download list, kept in `~/.local/share/seekr/downloads.json` so a
+//! The download list, kept in `~/.local/share/crabseek/downloads.json` so a
 //! restart does not lose it. Unfinished downloads are queued again on the
 //! next start and resume from their `.part` files, like Nicotine+ does
 //! with its `downloads.json`. The buddy list sits next to it in
@@ -21,7 +21,7 @@ pub struct SavedDownload {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum SavedStatus {
-    /// Queued or transferring when seekr quit; queued again on start.
+    /// Queued or transferring when crabseek quit; queued again on start.
     Pending,
     Completed {
         path: PathBuf,
@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn roundtrip_and_corrupt_file() {
-        let dir = std::env::temp_dir().join(format!("seekr-persist-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("crabseek-persist-{}", std::process::id()));
         let path = dir.join("downloads.json");
         assert!(load(&path).is_empty());
 
@@ -138,7 +138,7 @@ mod tests {
 
     #[test]
     fn buddies_roundtrip() {
-        let dir = std::env::temp_dir().join(format!("seekr-buddies-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("crabseek-buddies-{}", std::process::id()));
         let path = dir.join("buddies.json");
         assert!(load_buddies(&path).is_empty());
         let names = vec!["alice".to_owned(), "bob".to_owned()];

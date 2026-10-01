@@ -1,12 +1,12 @@
-//! `seekr search`: collect results for a while, then print them grouped by
+//! `crabseek search`: collect results for a while, then print them grouped by
 //! user and folder.
 
 use std::collections::BTreeMap;
 use std::io::Write;
 use std::time::Duration;
 
-use seekr_net::{Client, Event};
-use seekr_proto::search::{SearchFile, SearchResponse};
+use crabseek_net::{Client, Event};
+use crabseek_proto::search::{SearchFile, SearchResponse};
 use tokio::sync::mpsc;
 
 pub async fn run(

@@ -4,9 +4,9 @@ use std::net::Ipv4Addr;
 use std::time::Duration;
 
 use bytes::BytesMut;
+use crabseek_proto::server::{LoginResponse, ServerRequest, ServerResponse};
+use crabseek_proto::{DecodeError, FrameCodec, FrameError};
 use futures::StreamExt;
-use seekr_proto::server::{LoginResponse, ServerRequest, ServerResponse};
-use seekr_proto::{DecodeError, FrameCodec, FrameError};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::net::tcp::OwnedReadHalf;

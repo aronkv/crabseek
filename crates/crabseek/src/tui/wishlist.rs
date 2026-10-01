@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-use seekr_proto::search::SearchResponse;
+use crabseek_proto::search::SearchResponse;
 
 use super::results::Results;
 
@@ -168,7 +168,7 @@ impl Wishlist {
 
 #[cfg(test)]
 mod tests {
-    use seekr_proto::search::SearchFile;
+    use crabseek_proto::search::SearchFile;
 
     use super::*;
 

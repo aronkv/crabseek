@@ -9,9 +9,9 @@
 
 use std::collections::HashMap;
 
-use seekr_proto::ConnectionType;
-use seekr_proto::distrib::DistribMsg;
-use seekr_proto::server::{PossibleParent, ServerRequest};
+use crabseek_proto::ConnectionType;
+use crabseek_proto::distrib::DistribMsg;
+use crabseek_proto::server::{PossibleParent, ServerRequest};
 use tokio::net::TcpStream;
 
 use super::{Actor, Event, Purpose};

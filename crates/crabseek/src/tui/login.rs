@@ -1,12 +1,12 @@
 //! First-run login screen, also shown when saved credentials stop working.
 
+use crabseek_net::{LoginError, StartError};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Position, Rect};
 use ratatui::style::{Style, Stylize};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
-use seekr_net::{LoginError, StartError};
 
 /// The server's limit for usernames.
 const MAX_USERNAME: usize = 30;
@@ -163,7 +163,7 @@ pub fn render(frame: &mut Frame, form: &LoginForm, config_path: &str) {
     let area = centered(frame.area(), 68, 17);
     frame.render_widget(Clear, area);
     let block = Block::bordered()
-        .title(" seekr ".bold())
+        .title(" crabseek ".bold())
         .title_bottom(Line::from(" Tab switch field · Enter log in · Esc quit ").dark_gray())
         .border_style(Style::new().cyan());
     let inner = block.inner(area).inner(ratatui::layout::Margin::new(2, 1));
@@ -257,7 +257,7 @@ pub fn render_splash(frame: &mut Frame, username: &str, error: Option<&str>) {
         " q quit "
     };
     let block = Block::bordered()
-        .title(" seekr ".bold())
+        .title(" crabseek ".bold())
         .title_bottom(Line::from(hint).dark_gray())
         .border_style(Style::new().cyan());
     let inner = block.inner(area).inner(ratatui::layout::Margin::new(2, 1));

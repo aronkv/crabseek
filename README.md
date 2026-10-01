@@ -1,10 +1,10 @@
 <div align="center">
 
-# seekr
+# crabseek
 
 **A fast, keyboard-driven [Soulseek](https://www.slsknet.org/) client for the terminal, written in Rust.**
 
-[![CI](https://github.com/DarkAaronfox/seekr/actions/workflows/ci.yml/badge.svg)](https://github.com/DarkAaronfox/seekr/actions/workflows/ci.yml)
+[![CI](https://github.com/DarkAaronfox/crabseek/actions/workflows/ci.yml/badge.svg)](https://github.com/DarkAaronfox/crabseek/actions/workflows/ci.yml)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg)
 
@@ -25,8 +25,13 @@
  10j/10k jump · Enter open folder · d download · w wishlist · f/F filter · Tab/Alt-1…7 tabs
 ```
 
-seekr speaks the Soulseek protocol natively. There is no daemon, web UI or Python runtime:
-you type `seekr`, search, and download whole albums in a few keystrokes.
+> **Formerly seekr.** The AUR name `seekr` belongs to an unrelated project, so this
+> one is now crabseek (Ferris the crab + seek). On its first run, crabseek moves your
+> old `seekr` login, settings and history over by itself; downloads stay where they
+> are.
+
+crabseek speaks the Soulseek protocol natively. There is no daemon, web UI or Python runtime:
+you type `crabseek`, search, and download whole albums in a few keystrokes.
 
 ## Features
 
@@ -57,7 +62,7 @@ you type `seekr`, search, and download whole albums in a few keystrokes.
   retry and cancel. The download list survives restarts, and unfinished downloads
   continue where they stopped.
 - **Sharing:** other users find your music folders (default `~/Music`) through
-  network-wide searches, and can browse and download from them. seekr joins the
+  network-wide searches, and can browse and download from them. crabseek joins the
   distributed search network on its own. Audio properties are read once and cached,
   and uploads are spread fairly over a configurable number of slots.
 - **Quality at a glance:** kbps for every file and folder (estimated from size and
@@ -69,7 +74,7 @@ you type `seekr`, search, and download whole albums in a few keystrokes.
 - **Solid networking:** direct and firewall-piercing (indirect) peer connections are
   raced against each other, so peers behind NAT still work. Peers behind your own
   router are reached locally.
-- **Scriptable CLI:** `seekr search`, `seekr download` and friends for quick checks
+- **Scriptable CLI:** `crabseek search`, `crabseek download` and friends for quick checks
   and automation.
 
 ## Installation
@@ -79,46 +84,46 @@ you type `seekr`, search, and download whole albums in a few keystrokes.
 You need a Rust toolchain (1.88 or newer). On Arch/CachyOS: `sudo pacman -S rustup && rustup default stable`.
 
 ```sh
-git clone https://github.com/DarkAaronfox/seekr.git
-cd seekr
-scripts/install.sh          # builds and installs to ~/.local/bin/seekr
+git clone https://github.com/DarkAaronfox/crabseek.git
+cd crabseek
+scripts/install.sh          # builds and installs to ~/.local/bin/crabseek
 ```
 
-Then run `seekr`. If your shell cannot find it, add `~/.local/bin` to your `PATH`; the
+Then run `crabseek`. If your shell cannot find it, add `~/.local/bin` to your `PATH`; the
 script prints how. To install somewhere else, use `PREFIX=/usr/local sudo -E scripts/install.sh`.
-Alternatively: `cargo install --git https://github.com/DarkAaronfox/seekr seekr`.
+Alternatively: `cargo install --git https://github.com/DarkAaronfox/crabseek crabseek`.
 
 ### Uninstall
 
 ```sh
-cd seekr
+cd crabseek
 scripts/uninstall.sh        # asks once, then removes everything
 scripts/uninstall.sh -y     # same, without the question
 ```
 
-This removes seekr completely:
+This removes crabseek completely:
 
 | Removed | Path |
 |---|---|
-| the program | `~/.local/bin/seekr` (or `$PREFIX/bin/seekr`) |
-| login and settings | `~/.config/seekr/` |
-| download list | `~/.local/share/seekr/` |
-| share cache | `~/.cache/seekr/` |
-| logs | `~/.local/state/seekr/` |
+| the program | `~/.local/bin/crabseek` (or `$PREFIX/bin/crabseek`) |
+| login and settings | `~/.config/crabseek/` |
+| download list | `~/.local/share/crabseek/` |
+| share cache | `~/.cache/crabseek/` |
+| logs | `~/.local/state/crabseek/` |
 
 Your downloaded music is **never** touched. The saved Soulseek password is deleted
 too, and Soulseek has no password reset, so keep a note of it if you want to use the
-account again. If you installed with `cargo install`, use `cargo uninstall seekr` for
+account again. If you installed with `cargo install`, use `cargo uninstall crabseek` for
 the binary and the script for the rest.
 
 ### AUR
 
-An AUR package is planned once seekr is stable. The draft lives in
+An AUR package is planned once crabseek is stable. The draft lives in
 [`packaging/aur/PKGBUILD`](packaging/aur/PKGBUILD).
 
 ## First run
 
-Start `seekr`. There is nothing to set up by hand: the first time, it asks for a
+Start `crabseek`. There is nothing to set up by hand: the first time, it asks for a
 Soulseek username and password, and it creates the config file itself once the server
 accepts them. On later starts it logs in straight away. The login screen only comes
 back if the saved password stops working.
@@ -128,16 +133,16 @@ back if the saved password stops working.
   time you log in with it, so double-check the spelling.
 
 Your credentials are saved only after the server accepts them. See
-[Security](#security) for where and how. To forget them, run `seekr logout`.
+[Security](#security) for where and how. To forget them, run `crabseek logout`.
 
 ### Let peers reach you
 
 Soulseek is peer-to-peer. Downloads and sharing work best when other users can connect
 to you on your listen port (TCP **2234** by default):
 
-- **Router:** seekr opens the port by itself with **UPnP** when the router supports
+- **Router:** crabseek opens the port by itself with **UPnP** when the router supports
   it, and renews it every 30 minutes. The Settings tab shows the result; check it any
-  time with `seekr portmap`. Without UPnP, forward TCP 2234 to your computer by hand.
+  time with `crabseek portmap`. Without UPnP, forward TCP 2234 to your computer by hand.
 - **Double NAT:** if Settings says the router "sits behind another NAT", your ISP's
   modem is in front of it. That device needs a forward to your router, or has to run
   in bridge mode.
@@ -149,7 +154,7 @@ Without this, you can still download from peers that are reachable themselves.
 
 | Where | Key | Action |
 |---|---|---|
-| everywhere | `s`, `/` | open the search box (seekr starts in the results list) |
+| everywhere | `s`, `/` | open the search box (crabseek starts in the results list) |
 | | `?` | explain the current tab: what it is for, how it works, its keys |
 | | `Alt-s` | toggle between the search box and the results, also while typing |
 | | `Tab`, `Alt-1`–`8`, `F1`–`F8` | switch between Search, Downloads, Uploads, Settings, Browse, Buddies, Wishlist and Chat |
@@ -190,28 +195,28 @@ Without this, you can still download from peers that are reachable themselves.
 ### Command line
 
 ```sh
-seekr                                   # the TUI
-seekr search "artist album" --full-paths [--wishlist]
-seekr download <user> '<remote\path\to\file.flac>'
-seekr userinfo <user>                   # test a peer connection
-seekr browse <user>                     # list a user's shared folders
-seekr message <user> "text"             # send a private message, print replies
-seekr portmap                           # test automatic port forwarding (UPnP)
-seekr shares ["query"] [--dir PATH]     # what you share, and what a search would find
-seekr logout                            # forget saved credentials
-seekr config-path                       # where the config lives
+crabseek                                   # the TUI
+crabseek search "artist album" --full-paths [--wishlist]
+crabseek download <user> '<remote\path\to\file.flac>'
+crabseek userinfo <user>                   # test a peer connection
+crabseek browse <user>                     # list a user's shared folders
+crabseek message <user> "text"             # send a private message, print replies
+crabseek portmap                           # test automatic port forwarding (UPnP)
+crabseek shares ["query"] [--dir PATH]     # what you share, and what a search would find
+crabseek logout                            # forget saved credentials
+crabseek config-path                       # where the config lives
 ```
 
 ## Configuration
 
 The download folder, the listen port and the shared folders can be changed in the
 **Settings** tab (`4`); changes apply and are saved immediately. Everything lives in
-`~/.config/seekr/config.toml`, and every key except the credentials is optional:
+`~/.config/crabseek/config.toml`, and every key except the credentials is optional:
 
 ```toml
 username = "..."                        # written by the login screen
 password = "..."
-download_dir = "~/Downloads/seekr"      # default
+download_dir = "~/Downloads/crabseek"      # default
 shared_dirs = ["~/Music"]               # default
 upload_slots = 2                        # default
 listen_port = 2234                      # default
@@ -222,26 +227,26 @@ server = "server.slsknet.org:2242"      # default
 
 | File | Contents |
 |---|---|
-| `~/.config/seekr/config.toml` | login and settings |
-| `~/.local/share/seekr/downloads.json` | the download list |
-| `~/.local/share/seekr/buddies.json` | the buddy list |
-| `~/.local/share/seekr/wishlist.json` | wishlist queries |
-| `~/.local/share/seekr/chats.json` | private message history (mode 600) |
-| `~/.cache/seekr/shares.json` | cached audio properties of shared files |
-| `~/.local/state/seekr/seekr.log` | log of the last TUI session (`RUST_LOG=debug` for more) |
+| `~/.config/crabseek/config.toml` | login and settings |
+| `~/.local/share/crabseek/downloads.json` | the download list |
+| `~/.local/share/crabseek/buddies.json` | the buddy list |
+| `~/.local/share/crabseek/wishlist.json` | wishlist queries |
+| `~/.local/share/crabseek/chats.json` | private message history (mode 600) |
+| `~/.cache/crabseek/shares.json` | cached audio properties of shared files |
+| `~/.local/state/crabseek/crabseek.log` | log of the last TUI session (`RUST_LOG=debug` for more) |
 
 ## Security
 
 - The Soulseek login needs the plain password, so clients have to keep it. Nicotine+
-  and slskd keep it unencrypted in their config files, and seekr does the same, with
-  tighter permissions: `~/.config/seekr/config.toml` is written with mode `600`,
+  and slskd keep it unencrypted in their config files, and crabseek does the same, with
+  tighter permissions: `~/.config/crabseek/config.toml` is written with mode `600`,
   inside a `700` directory, so only your user can read it. The file is replaced
   atomically.
 - Encrypting the file would not add real protection, because the key would have to sit
   on the same disk. System keyring support (Secret Service) may come as an option.
 - Credentials never appear in logs, and the config lives outside the source tree, so
   it cannot end up in a commit of this repository.
-- If you keep `~/.config` in a dotfiles repository, make sure `seekr/` is not
+- If you keep `~/.config` in a dotfiles repository, make sure `crabseek/` is not
   committed.
 
 ## Roadmap
@@ -270,14 +275,14 @@ The workspace has three crates:
 |---|---|
 | `crates/proto` | Soulseek message encoding and decoding, without I/O. Byte-for-byte tests against the spec. |
 | `crates/net` | tokio networking: server session, peer connections, searches, transfers, and an actor that ties them together. |
-| `crates/seekr` | The binary: ratatui TUI and CLI. |
+| `crates/crabseek` | The binary: ratatui TUI and CLI. |
 
 ## Acknowledgements
 
 - The [Nicotine+ protocol documentation](https://nicotine-plus.org/doc/SLSKPROTOCOL.html),
   the reference used to implement the protocol.
 - [soulseek-rs](https://github.com/michel/soulseek-rs), another Rust client, consulted
-  for comparison. seekr's code is written from scratch.
+  for comparison. crabseek's code is written from scratch.
 
 ## License
 

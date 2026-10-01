@@ -8,8 +8,8 @@ edition = "2024"
 rust-version = "1.88"
 license = "MIT"
 authors = ["DarkAaronfox"]
-repository = "https://github.com/DarkAaronfox/seekr"
-homepage = "https://github.com/DarkAaronfox/seekr"
+repository = "https://github.com/DarkAaronfox/crabseek"
+homepage = "https://github.com/DarkAaronfox/crabseek"
 
 # `cargo run` stays debuggable but no longer crawls through zlib and
 # protocol decoding: our code gets basic optimizations, dependencies full.

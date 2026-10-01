@@ -1,4 +1,4 @@
-//! Networking on top of `seekr-proto`.
+//! Networking on top of `crabseek-proto`.
 
 pub mod client;
 pub mod connect;

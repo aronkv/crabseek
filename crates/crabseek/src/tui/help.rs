@@ -78,14 +78,14 @@ fn page(tab: Tab) -> Page {
         Tab::Settings => Page {
             title: "Settings",
             about: &[
-                "Changes apply and are saved at once (~/.config/seekr/config.toml).",
-                "Listen port: other users connect to you on it. With UPnP on, seekr opens it \
+                "Changes apply and are saved at once (~/.config/crabseek/config.toml).",
+                "Listen port: other users connect to you on it. With UPnP on, crabseek opens it \
                  on your router by itself; otherwise forward it by hand.",
                 "Shared folders: the music others can search, browse and download from you. \
                  Soulseek expects everyone to share.",
                 "Desktop notifications (off by default): finished downloads (an album's \
                  files come as one notification), private messages and new wishlist results.",
-                "Distributed network: seekr joins the network-wide search tree, so searches \
+                "Distributed network: crabseek joins the network-wide search tree, so searches \
                  reach your shares.",
             ],
             keys: &[
@@ -147,7 +147,7 @@ fn page(tab: Tab) -> Page {
             title: "Wishlist",
             about: &[
                 "Searches that keep running in the background, for things that are hard to \
-                 find. The server allows one wishlist search every 12 minutes, so seekr runs \
+                 find. The server allows one wishlist search every 12 minutes, so crabseek runs \
                  your wishes one after the other, in turn.",
                 "Results collect per wish. Files you have not seen before count as new: the \
                  tab title shows how many, and the status line tells you when some arrive.",

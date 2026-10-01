@@ -4,10 +4,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use seekr_proto::peer::PeerMsg;
-use seekr_proto::search::SearchResponse;
-use seekr_proto::server::ServerRequest;
-use seekr_proto::shares::FolderContents;
+use crabseek_proto::peer::PeerMsg;
+use crabseek_proto::search::SearchResponse;
+use crabseek_proto::server::ServerRequest;
+use crabseek_proto::shares::FolderContents;
 
 use super::{Actor, Event, Internal};
 use crate::shares::{MAX_SEARCH_RESULTS, MetadataCache, ShareIndex};

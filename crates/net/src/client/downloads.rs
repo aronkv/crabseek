@@ -7,7 +7,7 @@ use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use seekr_proto::peer::{PeerMsg, TransferDirection};
+use crabseek_proto::peer::{PeerMsg, TransferDirection};
 use tokio::net::TcpStream;
 use tokio::task::AbortHandle;
 

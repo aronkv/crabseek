@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
-use seekr_proto::search::{SearchFile, SearchResponse};
+use crabseek_proto::search::{SearchFile, SearchResponse};
 
 use crate::search::{format_kbps, is_lossy, kbps};
 

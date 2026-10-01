@@ -5,8 +5,8 @@ use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
-use seekr_proto::ConnectionType;
-use seekr_proto::peer_init::PeerInitMsg;
+use crabseek_proto::ConnectionType;
+use crabseek_proto::peer_init::PeerInitMsg;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 

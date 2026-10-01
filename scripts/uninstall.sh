@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Removes seekr completely: the binary, your login and settings, the
+# Removes crabseek completely: the binary, your login and settings, the
 # download list, the share cache and the logs. Downloaded music is never
 # touched.
 #
@@ -8,24 +8,24 @@
 set -eu
 
 PREFIX="${PREFIX:-$HOME/.local}"
-CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/seekr"
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/crabseek"
 
 targets=""
 for path in \
-    "$PREFIX/bin/seekr" \
+    "$PREFIX/bin/crabseek" \
     "$CONFIG" \
-    "${XDG_DATA_HOME:-$HOME/.local/share}/seekr" \
-    "${XDG_STATE_HOME:-$HOME/.local/state}/seekr" \
-    "${XDG_CACHE_HOME:-$HOME/.cache}/seekr"; do
+    "${XDG_DATA_HOME:-$HOME/.local/share}/crabseek" \
+    "${XDG_STATE_HOME:-$HOME/.local/state}/crabseek" \
+    "${XDG_CACHE_HOME:-$HOME/.cache}/crabseek"; do
     [ -e "$path" ] && targets="$targets $path"
 done
 
 if [ -z "$targets" ]; then
-    echo "seekr is not installed (set PREFIX if you installed it elsewhere)"
+    echo "crabseek is not installed (set PREFIX if you installed it elsewhere)"
     exit 0
 fi
 
-echo "This removes seekr (your downloaded music stays):"
+echo "This removes crabseek (your downloaded music stays):"
 for path in $targets; do
     echo "  $path"
 done
@@ -50,4 +50,4 @@ fi
 for path in $targets; do
     rm -rf "$path"
 done
-echo "seekr removed"
+echo "crabseek removed"

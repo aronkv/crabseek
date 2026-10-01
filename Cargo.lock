@@ -526,6 +526,58 @@ dependencies = [
 ]
 
 [[package]]
+name = "crabseek"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "crabseek-net",
+ "crabseek-proto",
+ "crossterm",
+ "directories",
+ "futures",
+ "notify-rust",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "unicode-width",
+]
+
+[[package]]
+name = "crabseek-net"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "crabseek-proto",
+ "futures",
+ "igd-next",
+ "lofty",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "walkdir",
+]
+
+[[package]]
+name = "crabseek-proto"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "flate2",
+ "md-5",
+ "thiserror 2.0.21",
+ "tokio-util",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2273,58 +2325,6 @@ name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
-
-[[package]]
-name = "seekr"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "crossterm",
- "directories",
- "futures",
- "notify-rust",
- "ratatui",
- "seekr-net",
- "seekr-proto",
- "serde",
- "serde_json",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
- "unicode-width",
-]
-
-[[package]]
-name = "seekr-net"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "futures",
- "igd-next",
- "lofty",
- "seekr-proto",
- "serde",
- "serde_json",
- "thiserror 2.0.21",
- "tokio",
- "tokio-util",
- "tracing",
- "walkdir",
-]
-
-[[package]]
-name = "seekr-proto"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "flate2",
- "md-5",
- "thiserror 2.0.21",
- "tokio-util",
-]
 
 [[package]]
 name = "semver"
