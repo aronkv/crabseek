@@ -13,6 +13,7 @@ pub enum Item {
     DownloadDir,
     ListenPort,
     Upnp,
+    Notifications,
     Shared(usize),
     AddShared,
 }
@@ -30,6 +31,7 @@ pub enum SettingsAction {
     /// Saved once the new port is actually bound.
     SetListenPort(u16),
     SetUpnp(bool),
+    SetNotifications(bool),
     SetSharedDirs(Vec<PathBuf>),
 }
 
@@ -37,6 +39,8 @@ pub struct Settings {
     pub download_dir: PathBuf,
     pub listen_port: u16,
     pub upnp: bool,
+    /// Desktop notifications; set by the app from the config.
+    pub notifications: bool,
     pub shared: Vec<PathBuf>,
     pub selected: usize,
     pub edit: Option<Edit>,
@@ -49,6 +53,7 @@ impl Settings {
             download_dir,
             listen_port,
             upnp,
+            notifications: false,
             shared,
             selected: 0,
             edit: None,
@@ -57,7 +62,12 @@ impl Settings {
     }
 
     pub fn items(&self) -> Vec<Item> {
-        let mut items = vec![Item::DownloadDir, Item::ListenPort, Item::Upnp];
+        let mut items = vec![
+            Item::DownloadDir,
+            Item::ListenPort,
+            Item::Upnp,
+            Item::Notifications,
+        ];
         items.extend((0..self.shared.len()).map(Item::Shared));
         items.push(Item::AddShared);
         items
@@ -65,7 +75,7 @@ impl Settings {
 
     /// Row index of the shared folder `i`.
     fn shared_index(i: usize) -> usize {
-        i + 3
+        i + 4
     }
 
     fn selected_item(&self) -> Item {
@@ -92,6 +102,12 @@ impl Settings {
                 self.upnp = !self.upnp;
                 return SettingsAction::SetUpnp(self.upnp);
             }
+            KeyCode::Enter | KeyCode::Char('e' | ' ')
+                if self.selected_item() == Item::Notifications =>
+            {
+                self.notifications = !self.notifications;
+                return SettingsAction::SetNotifications(self.notifications);
+            }
             KeyCode::Enter | KeyCode::Char('e') => self.start_edit(self.selected_item()),
             KeyCode::Char('a') => {
                 self.selected = count - 1;
@@ -113,7 +129,7 @@ impl Settings {
         let text = match item {
             Item::DownloadDir => display_path(&self.download_dir),
             Item::ListenPort => self.listen_port.to_string(),
-            Item::Upnp => return,
+            Item::Upnp | Item::Notifications => return,
             Item::Shared(i) => display_path(&self.shared[i]),
             Item::AddShared => "~/".to_owned(),
         };
@@ -178,7 +194,9 @@ impl Settings {
                 self.download_dir = path.clone();
                 SettingsAction::SetDownloadDir(path)
             }
-            Item::ListenPort | Item::Upnp => unreachable!("handled above"),
+            Item::ListenPort | Item::Upnp | Item::Notifications => {
+                unreachable!("handled above")
+            }
             item @ (Item::Shared(_) | Item::AddShared) => {
                 if !path.is_dir() {
                     self.error = Some(format!(
@@ -326,12 +344,26 @@ mod tests {
         assert_eq!(s.on_key(key(KeyCode::Enter)), SettingsAction::None);
         s.on_key(key(KeyCode::Esc));
 
-        s.selected = 3;
+        s.selected = 4;
         assert_eq!(
             s.on_key(key(KeyCode::Char('x'))),
             SettingsAction::SetSharedDirs(vec![])
         );
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn notifications_toggle() {
+        let mut s = Settings::new(PathBuf::from("/dl"), 2234, true, vec![]);
+        s.selected = 3;
+        assert_eq!(
+            s.on_key(key(KeyCode::Enter)),
+            SettingsAction::SetNotifications(true)
+        );
+        assert_eq!(
+            s.on_key(key(KeyCode::Enter)),
+            SettingsAction::SetNotifications(false)
+        );
     }
 
     #[test]

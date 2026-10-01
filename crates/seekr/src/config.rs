@@ -34,6 +34,9 @@ pub struct Config {
     /// Open the listen port on the router automatically (UPnP).
     #[serde(default = "default_upnp")]
     pub upnp: bool,
+    /// Desktop notifications; off unless turned on.
+    #[serde(default)]
+    pub notifications: bool,
 }
 
 impl Default for Config {
@@ -194,6 +197,12 @@ pub fn save_download_dir(dir: &Path) -> anyhow::Result<()> {
 pub fn save_listen_port(port: u16) -> anyhow::Result<()> {
     update(|table| {
         table.insert("listen_port".into(), i64::from(port).into());
+    })
+}
+
+pub fn save_notifications(enabled: bool) -> anyhow::Result<()> {
+    update(|table| {
+        table.insert("notifications".into(), enabled.into());
     })
 }
 

@@ -11,6 +11,7 @@ use seekr_proto::shares::SharedFileList;
 
 use super::buddies::Buddies;
 use super::chat::{self, ChatInput, Chats};
+use super::notify::{self, DownloadBatch};
 use super::results::Results;
 use super::settings::{Settings, SettingsAction};
 use super::transfers::Transfers;
@@ -132,6 +133,8 @@ pub struct App {
     pub count: Option<usize>,
     /// The `?` help window is open.
     pub help: bool,
+    /// Finished downloads waiting to be announced together.
+    download_batch: DownloadBatch,
 }
 
 impl App {
@@ -185,6 +188,7 @@ impl App {
             confirm_quit: false,
             count: None,
             help: false,
+            download_batch: DownloadBatch::default(),
             downloads_path,
             buddies_path: None,
             wishlist: Wishlist::default(),
@@ -192,6 +196,7 @@ impl App {
             chats: Chats::default(),
             chats_path: None,
         };
+        app.settings.notifications = cfg.notifications;
         app.restore(saved);
         Ok(app)
     }
@@ -292,6 +297,9 @@ impl App {
     pub fn tick(&mut self) {
         if let Some(index) = self.wishlist.due(Instant::now()) {
             self.run_wish(index);
+        }
+        if let Some((summary, body)) = self.download_batch.take_due(Instant::now()) {
+            notify::send(summary, body);
         }
     }
 
@@ -410,6 +418,12 @@ impl App {
                     && new > 0
                 {
                     self.status = format!("wishlist: {new} new files for {query:?}");
+                    if self.settings.notifications {
+                        notify::send(
+                            format!("Wishlist: {query}"),
+                            format!("{new} new files found"),
+                        );
+                    }
                 }
             }
             Event::PrivateMessage {
@@ -425,6 +439,9 @@ impl App {
                         .is_some_and(|c| c.username == username);
                 let preview: String = message.chars().take(60).collect();
                 self.status = format!("message from {username}: {preview}");
+                if self.settings.notifications && !seen {
+                    notify::send(format!("Message from {username}"), message.clone());
+                }
                 self.chats.receive(&username, message, timestamp, seen);
             }
             Event::ServerMessage(ServerResponse::WishlistInterval(secs)) => {
@@ -457,6 +474,13 @@ impl App {
             } => {
                 if let DownloadState::Completed { path } = &state {
                     self.status = format!("saved {}", path.display());
+                    if self.settings.notifications {
+                        let name = path
+                            .file_name()
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        self.download_batch.push(name, Instant::now());
+                    }
                 }
                 self.transfers.update(id, username, filename, state);
             }
@@ -823,6 +847,19 @@ impl App {
                     Err(e) => e.to_string(),
                 };
                 return;
+            }
+            SettingsAction::SetNotifications(enabled) => {
+                config::save_notifications(enabled).map(|()| {
+                    if enabled {
+                        notify::send(
+                            "seekr".to_owned(),
+                            "Desktop notifications are on".to_owned(),
+                        );
+                        "desktop notifications on".to_owned()
+                    } else {
+                        "desktop notifications off".to_owned()
+                    }
+                })
             }
             SettingsAction::SetUpnp(enabled) => config::save_upnp(enabled).map(|()| {
                 let _ = self.client.set_upnp(enabled);

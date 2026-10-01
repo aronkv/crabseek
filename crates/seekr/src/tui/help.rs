@@ -83,11 +83,16 @@ fn page(tab: Tab) -> Page {
                  on your router by itself; otherwise forward it by hand.",
                 "Shared folders: the music others can search, browse and download from you. \
                  Soulseek expects everyone to share.",
+                "Desktop notifications (off by default): finished downloads (an album's \
+                 files come as one notification), private messages and new wishlist results.",
                 "Distributed network: seekr joins the network-wide search tree, so searches \
                  reach your shares.",
             ],
             keys: &[
-                ("Enter", "edit a folder or the port, or switch UPnP on/off"),
+                (
+                    "Enter / Space",
+                    "edit a folder or the port; switch UPnP or notifications",
+                ),
                 ("Tab (while editing)", "complete a folder path"),
                 ("a / x", "add / remove a shared folder"),
             ],

@@ -1106,6 +1106,17 @@ fn render_settings(frame: &mut Frame, app: &mut App, area: Rect) {
         PortMapStatus::Failed(e) => Line::from(format!("  {e} – forward the port by hand")).red(),
     });
     lines.push(Line::default());
+    lines.push(Line::from("Desktop notifications").bold());
+    push_item(
+        &mut lines,
+        3,
+        Item::Notifications,
+        format!(
+            "[{}] notify about finished downloads, private messages and new wishlist results",
+            if s.notifications { "x" } else { " " }
+        ),
+    );
+    lines.push(Line::default());
     lines.push(Line::from("Distributed network").bold());
     lines.push(
         Line::from(match &app.distrib {
@@ -1141,11 +1152,11 @@ fn render_settings(frame: &mut Frame, app: &mut App, area: Rect) {
         .green(),
     );
     for (i, dir) in s.shared.iter().enumerate() {
-        push_item(&mut lines, i + 3, Item::Shared(i), display_path(dir));
+        push_item(&mut lines, i + 4, Item::Shared(i), display_path(dir));
     }
     push_item(
         &mut lines,
-        s.shared.len() + 3,
+        s.shared.len() + 4,
         Item::AddShared,
         "+ add folder".to_owned(),
     );

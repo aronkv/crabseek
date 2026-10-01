@@ -44,6 +44,9 @@ you type `seekr`, search, and download whole albums in a few keystrokes.
 - **Private messages:** chat with other users on the Chat tab. `m` on any search
   result, download, upload or buddy writes to that user, and messages sent while you
   were offline arrive when you log in. The history is kept between runs.
+- **Desktop notifications (optional):** finished downloads (an album is one
+  notification, not twenty), private messages and new wishlist results. Off by
+  default; turn them on in Settings.
 - **Built-in help:** `?` on any tab explains what it is for and lists its keys.
 - **Wishlist:** saved searches keep running in the background, one every 12
   minutes as the server allows, and the Wishlist tab counts files you have not seen
@@ -171,7 +174,7 @@ Without this, you can still download from peers that are reachable themselves.
 | | `x` | clear finished downloads |
 | uploads | `c` | cancel |
 | | `x` | clear finished uploads |
-| settings | `Enter` | edit the selected folder or port (`Tab` completes paths), toggle UPnP |
+| settings | `Enter` | edit the selected folder or port (`Tab` completes paths), toggle UPnP or notifications |
 | | `a` / `x` | add or remove a shared folder |
 | buddies | `a` | type a username to add (`Enter` adds it) |
 | | `x` | remove the selected buddy |
@@ -213,6 +216,7 @@ shared_dirs = ["~/Music"]               # default
 upload_slots = 2                        # default
 listen_port = 2234                      # default
 upnp = true                             # default: open the port on the router
+notifications = false                   # default: no desktop notifications
 server = "server.slsknet.org:2242"      # default
 ```
 

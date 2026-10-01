@@ -5,6 +5,7 @@ mod buddies;
 mod chat;
 mod help;
 mod login;
+mod notify;
 mod results;
 mod settings;
 mod transfers;
