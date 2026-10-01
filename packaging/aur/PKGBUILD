@@ -1,7 +1,7 @@
 # Maintainer: DarkAaronfox <120031218+DarkAaronfox@users.noreply.github.com>
 #
-# Draft for a future AUR release; not published yet. Before publishing:
-# tag a release, set pkgver, replace the checksum, run namcap.
+# To release: tag vX.Y.Z on GitHub, set pkgver, `updpkgsums`,
+# `makepkg --printsrcinfo > .SRCINFO`, push both to the AUR repo.
 pkgname=crabseek
 pkgver=0.1.0
 pkgrel=1
@@ -9,7 +9,7 @@ pkgdesc="A fast Soulseek client for the terminal"
 arch=('x86_64' 'aarch64')
 url="https://github.com/DarkAaronfox/crabseek"
 license=('MIT')
-depends=('gcc-libs' 'glibc')
+depends=('libgcc' 'glibc')
 makedepends=('cargo')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
 sha256sums=('SKIP')
@@ -17,7 +17,7 @@ sha256sums=('SKIP')
 prepare() {
     cd "$pkgname-$pkgver"
     export RUSTUP_TOOLCHAIN=stable
-    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+    cargo fetch --locked --target "$(rustc --print host-tuple)"
 }
 
 build() {
