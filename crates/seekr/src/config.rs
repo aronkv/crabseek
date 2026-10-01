@@ -137,6 +137,10 @@ pub fn downloads_path() -> anyhow::Result<PathBuf> {
     Ok(project_dirs()?.data_dir().join("downloads.json"))
 }
 
+pub fn buddies_path() -> anyhow::Result<PathBuf> {
+    Ok(project_dirs()?.data_dir().join("buddies.json"))
+}
+
 /// Log file used while the TUI owns the terminal.
 pub fn log_path() -> anyhow::Result<PathBuf> {
     let dirs = project_dirs()?;

@@ -19,11 +19,15 @@ mod code {
     pub const LOGIN: u32 = 1;
     pub const SET_WAIT_PORT: u32 = 2;
     pub const GET_PEER_ADDRESS: u32 = 3;
+    pub const WATCH_USER: u32 = 5;
+    pub const UNWATCH_USER: u32 = 6;
+    pub const GET_USER_STATUS: u32 = 7;
     pub const CONNECT_TO_PEER: u32 = 18;
     pub const FILE_SEARCH: u32 = 26;
     pub const SET_STATUS: u32 = 28;
     pub const SERVER_PING: u32 = 32;
     pub const SHARED_FOLDERS_FILES: u32 = 35;
+    pub const GET_USER_STATS: u32 = 36;
     pub const HAVE_NO_PARENT: u32 = 71;
     pub const EMBEDDED_MESSAGE: u32 = 93;
     pub const ACCEPT_CHILDREN: u32 = 100;
@@ -50,6 +54,14 @@ pub enum ServerRequest {
     GetPeerAddress {
         username: String,
     },
+    /// Keeps us updated about a user: the server answers with
+    /// [`ServerResponse::WatchUser`], then sends
+    /// [`ServerResponse::UserStatus`] whenever their status changes.
+    WatchUser(String),
+    UnwatchUser(String),
+    /// Asks for a user's current stats; the answer is
+    /// [`ServerResponse::UserStats`].
+    GetUserStats(String),
     /// Indirect connection request: the server asks `username` to connect
     /// to us and greet us with `PierceFireWall(token)`.
     ConnectToPeer {
@@ -125,6 +137,18 @@ impl ServerRequest {
             }
             Self::GetPeerAddress { username } => {
                 b.put_u32_le(code::GET_PEER_ADDRESS);
+                b.put_string_wire(username);
+            }
+            Self::WatchUser(username) => {
+                b.put_u32_le(code::WATCH_USER);
+                b.put_string_wire(username);
+            }
+            Self::UnwatchUser(username) => {
+                b.put_u32_le(code::UNWATCH_USER);
+                b.put_string_wire(username);
+            }
+            Self::GetUserStats(username) => {
+                b.put_u32_le(code::GET_USER_STATS);
                 b.put_string_wire(username);
             }
             Self::ConnectToPeer {
@@ -209,6 +233,23 @@ pub enum ServerResponse {
         token: u32,
         privileged: bool,
     },
+    /// Answer to [`ServerRequest::WatchUser`]; `user` is `None` when no
+    /// such account exists.
+    WatchUser {
+        username: String,
+        user: Option<WatchedUser>,
+    },
+    /// A watched user went online, away or offline.
+    UserStatus {
+        username: String,
+        status: OnlineStatus,
+        privileged: bool,
+    },
+    /// Answer to [`ServerRequest::GetUserStats`].
+    UserStats {
+        username: String,
+        stats: UserStats,
+    },
     /// The peer could not answer our `ConnectToPeer` with this token.
     CantConnectToPeer {
         token: u32,
@@ -234,6 +275,57 @@ pub enum ServerResponse {
         code: u32,
         payload: Bytes,
     },
+}
+
+/// A user's presence ("User Status Codes" in the spec).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
+pub enum OnlineStatus {
+    #[default]
+    Offline,
+    Away,
+    Online,
+}
+
+impl OnlineStatus {
+    fn from_code(code: u32) -> Self {
+        match code {
+            1 => Self::Away,
+            2 => Self::Online,
+            _ => Self::Offline,
+        }
+    }
+}
+
+/// What the server knows about a user's sharing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct UserStats {
+    /// Average upload speed in bytes per second.
+    pub avg_speed: u32,
+    pub upload_num: u32,
+    pub files: u32,
+    pub dirs: u32,
+}
+
+impl UserStats {
+    fn decode(r: &mut Reader) -> DecodeResult<Self> {
+        let avg_speed = r.u32()?;
+        let upload_num = r.u32()?;
+        let _unknown = r.u32()?;
+        Ok(Self {
+            avg_speed,
+            upload_num,
+            files: r.u32()?,
+            dirs: r.u32()?,
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WatchedUser {
+    pub status: OnlineStatus,
+    pub stats: UserStats,
+    /// Uppercase country code; only sent while the user is online or away.
+    pub country: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -283,6 +375,36 @@ impl ServerResponse {
                     .then(|| r.bool())
                     .transpose()?
                     .unwrap_or(false),
+            },
+            code::WATCH_USER => {
+                let username = r.string()?;
+                let user = if r.bool()? {
+                    let status = OnlineStatus::from_code(r.u32()?);
+                    let stats = UserStats::decode(&mut r)?;
+                    let country = (status != OnlineStatus::Offline && !r.is_empty())
+                        .then(|| r.string())
+                        .transpose()?;
+                    Some(WatchedUser {
+                        status,
+                        stats,
+                        country,
+                    })
+                } else {
+                    None
+                };
+                Self::WatchUser { username, user }
+            }
+            code::GET_USER_STATUS => Self::UserStatus {
+                username: r.string()?,
+                status: OnlineStatus::from_code(r.u32()?),
+                privileged: (!r.is_empty())
+                    .then(|| r.bool())
+                    .transpose()?
+                    .unwrap_or(false),
+            },
+            code::GET_USER_STATS => Self::UserStats {
+                username: r.string()?,
+                stats: UserStats::decode(&mut r)?,
             },
             code::CANT_CONNECT_TO_PEER => Self::CantConnectToPeer { token: r.u32()? },
             code::POSSIBLE_PARENTS => {
@@ -575,6 +697,125 @@ mod tests {
                 username: "bob".into(),
                 token: 5,
                 query: "ab".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn watch_requests() {
+        let enc = |msg: ServerRequest| {
+            let mut buf = BytesMut::new();
+            msg.encode(&mut buf);
+            buf.to_vec()
+        };
+        let frame = |code: u8| {
+            let mut v = vec![11, 0, 0, 0, code, 0, 0, 0, 3, 0, 0, 0];
+            v.extend_from_slice(b"bob");
+            v
+        };
+        assert_eq!(enc(ServerRequest::WatchUser("bob".into())), frame(5));
+        assert_eq!(enc(ServerRequest::UnwatchUser("bob".into())), frame(6));
+        assert_eq!(enc(ServerRequest::GetUserStats("bob".into())), frame(36));
+    }
+
+    fn stats(b: &mut BytesMut) {
+        b.put_u32_le(150_000); // avgspeed
+        b.put_u32_le(42); // uploadnum
+        b.put_u32_le(0); // unknown
+        b.put_u32_le(1200); // files
+        b.put_u32_le(80); // dirs
+    }
+
+    const STATS: UserStats = UserStats {
+        avg_speed: 150_000,
+        upload_num: 42,
+        files: 1200,
+        dirs: 80,
+    };
+
+    #[test]
+    fn decode_watch_user() {
+        let online = payload(|b| {
+            b.put_u32_le(5);
+            b.put_string_wire("bob");
+            b.put_bool_wire(true);
+            b.put_u32_le(2);
+            stats(b);
+            b.put_string_wire("HU");
+        });
+        assert_eq!(
+            ServerResponse::decode(online),
+            Ok(ServerResponse::WatchUser {
+                username: "bob".into(),
+                user: Some(WatchedUser {
+                    status: OnlineStatus::Online,
+                    stats: STATS,
+                    country: Some("HU".into()),
+                }),
+            })
+        );
+
+        // Offline users come without a country code.
+        let offline = payload(|b| {
+            b.put_u32_le(5);
+            b.put_string_wire("bob");
+            b.put_bool_wire(true);
+            b.put_u32_le(0);
+            stats(b);
+        });
+        assert_eq!(
+            ServerResponse::decode(offline),
+            Ok(ServerResponse::WatchUser {
+                username: "bob".into(),
+                user: Some(WatchedUser {
+                    status: OnlineStatus::Offline,
+                    stats: STATS,
+                    country: None,
+                }),
+            })
+        );
+
+        let missing = payload(|b| {
+            b.put_u32_le(5);
+            b.put_string_wire("nobody");
+            b.put_bool_wire(false);
+        });
+        assert_eq!(
+            ServerResponse::decode(missing),
+            Ok(ServerResponse::WatchUser {
+                username: "nobody".into(),
+                user: None,
+            })
+        );
+    }
+
+    #[test]
+    fn decode_user_status_and_stats() {
+        let p = payload(|b| {
+            b.put_u32_le(7);
+            b.put_string_wire("bob");
+            b.put_u32_le(1);
+            b.put_bool_wire(true);
+        });
+        assert_eq!(
+            ServerResponse::decode(p),
+            Ok(ServerResponse::UserStatus {
+                username: "bob".into(),
+                status: OnlineStatus::Away,
+                privileged: true,
+            })
+        );
+
+        let p = payload(|b| {
+            b.put_u32_le(36);
+            b.put_string_wire("bob");
+            stats(b);
+        });
+        assert_eq!(
+            ServerResponse::decode(p),
+            Ok(ServerResponse::UserStats {
+                username: "bob".into(),
+                stats: STATS,
             })
         );
     }

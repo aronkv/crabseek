@@ -22,9 +22,14 @@ use tokio::sync::mpsc;
 struct Session {
     port: u32,
     tx: mpsc::UnboundedSender<Vec<u8>>,
+    /// From SharedFoldersFiles.
+    dirs: u32,
+    files: u32,
 }
 
 type Sessions = Arc<Mutex<HashMap<String, Session>>>;
+/// Who watches whom: watched username → watchers' connections.
+type Watchers = Arc<Mutex<HashMap<String, Vec<mpsc::UnboundedSender<Vec<u8>>>>>>;
 
 /// How the fake server behaves.
 #[derive(Default)]
@@ -52,7 +57,8 @@ fn frame(code: u32, body: impl FnOnce(&mut BytesMut)) -> Vec<u8> {
 }
 
 /// Implements just enough of the server: login, SetWaitPort,
-/// GetPeerAddress and relaying ConnectToPeer. Everything is on 127.0.0.1.
+/// GetPeerAddress, relaying ConnectToPeer and watching users. Every
+/// watched name counts as an existing account. Everything is on 127.0.0.1.
 async fn fake_server(firewalled: &[&str]) -> String {
     fake_server_with(Opts {
         firewalled: firewalled.iter().map(|s| s.to_string()).collect(),
@@ -66,16 +72,30 @@ async fn fake_server_with(opts: Opts) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap().to_string();
     let sessions: Sessions = Arc::default();
+    let watchers: Watchers = Arc::default();
     tokio::spawn(async move {
         loop {
             let (stream, _) = listener.accept().await.unwrap();
-            tokio::spawn(serve(stream, sessions.clone(), opts.clone()));
+            tokio::spawn(serve(
+                stream,
+                sessions.clone(),
+                watchers.clone(),
+                opts.clone(),
+            ));
         }
     });
     addr
 }
 
-async fn serve(stream: TcpStream, sessions: Sessions, opts: Arc<Opts>) {
+fn user_stats(b: &mut BytesMut, session: Option<&Session>) {
+    b.put_u32_le(0); // avgspeed
+    b.put_u32_le(0); // uploadnum
+    b.put_u32_le(0); // unknown
+    b.put_u32_le(session.map_or(0, |s| s.files));
+    b.put_u32_le(session.map_or(0, |s| s.dirs));
+}
+
+async fn serve(stream: TcpStream, sessions: Sessions, watchers: Watchers, opts: Arc<Opts>) {
     let (mut read, mut write) = stream.into_split();
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
     tokio::spawn(async move {
@@ -104,6 +124,8 @@ async fn serve(stream: TcpStream, sessions: Sessions, opts: Arc<Opts>) {
                     Session {
                         port: 0,
                         tx: tx.clone(),
+                        dirs: 0,
+                        files: 0,
                     },
                 );
                 tx.send(frame(1, |b| {
@@ -114,6 +136,61 @@ async fn serve(stream: TcpStream, sessions: Sessions, opts: Arc<Opts>) {
                     b.put_bool_wire(false);
                 }))
                 .unwrap();
+                // GetUserStatus: tell everyone watching that we are online.
+                for watcher in watchers.lock().unwrap().get(&me).into_iter().flatten() {
+                    let _ = watcher.send(frame(7, |b| {
+                        b.put_string_wire(&me);
+                        b.put_u32_le(2);
+                        b.put_bool_wire(false);
+                    }));
+                }
+            }
+            // WatchUser
+            5 => {
+                let user = r.string().unwrap();
+                watchers
+                    .lock()
+                    .unwrap()
+                    .entry(user.clone())
+                    .or_default()
+                    .push(tx.clone());
+                let sessions = sessions.lock().unwrap();
+                let session = sessions.get(&user);
+                tx.send(frame(5, |b| {
+                    b.put_string_wire(&user);
+                    b.put_bool_wire(true);
+                    b.put_u32_le(if session.is_some() { 2 } else { 0 });
+                    user_stats(b, session);
+                    if session.is_some() {
+                        b.put_string_wire("HU");
+                    }
+                }))
+                .unwrap();
+            }
+            // UnwatchUser
+            6 => {
+                let user = r.string().unwrap();
+                if let Some(list) = watchers.lock().unwrap().get_mut(&user) {
+                    list.retain(|w| !w.same_channel(&tx));
+                }
+            }
+            // GetUserStats
+            36 => {
+                let user = r.string().unwrap();
+                let sessions = sessions.lock().unwrap();
+                tx.send(frame(36, |b| {
+                    b.put_string_wire(&user);
+                    user_stats(b, sessions.get(&user));
+                }))
+                .unwrap();
+            }
+            // SharedFoldersFiles
+            35 => {
+                let (dirs, files) = (r.u32().unwrap(), r.u32().unwrap());
+                if let Some(s) = sessions.lock().unwrap().get_mut(&me) {
+                    s.dirs = dirs;
+                    s.files = files;
+                }
             }
             // SetWaitPort
             2 => {
@@ -199,7 +276,7 @@ async fn serve(stream: TcpStream, sessions: Sessions, opts: Arc<Opts>) {
                     .unwrap();
                 }
             }
-            // SetStatus, ServerPing, SharedFoldersFiles, SendUploadSpeed,
+            // SetStatus, ServerPing, SendUploadSpeed,
             // CantConnectToPeer, AcceptChildren, BranchLevel, BranchRoot:
             // nothing to answer.
             _ => {}
@@ -547,5 +624,71 @@ async fn listen_port_change_keeps_us_reachable() {
         _ => None,
     })
     .await;
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Bob watches Alice before she logs in, sees her come online, and then
+/// asks for her stats once she has scanned her shares.
+#[tokio::test]
+async fn watch_user_status_and_stats() {
+    use seekr_proto::server::{OnlineStatus, ServerResponse, UserStats};
+
+    let root = temp_dir("watch");
+    let share = root.join("Music");
+    std::fs::create_dir_all(share.join("Album")).unwrap();
+    std::fs::write(share.join("Album").join("01.flac"), song(1000)).unwrap();
+
+    let server = fake_server(&[]).await;
+    let (bob, mut bob_events) = start(&server, "bob", &root.join("bob-dl"), vec![]).await;
+
+    bob.watch_user("alice").unwrap();
+    let user = wait_for(&mut bob_events, |e| match e {
+        Event::ServerMessage(ServerResponse::WatchUser { username, user })
+            if username == "alice" =>
+        {
+            Some(user)
+        }
+        _ => None,
+    })
+    .await
+    .expect("alice should exist");
+    assert_eq!(user.status, OnlineStatus::Offline);
+    assert_eq!(user.country, None);
+
+    let (_alice, mut alice_events) =
+        start(&server, "alice", &root.join("alice-dl"), vec![share]).await;
+    let status = wait_for(&mut bob_events, |e| match e {
+        Event::ServerMessage(ServerResponse::UserStatus {
+            username, status, ..
+        }) if username == "alice" => Some(status),
+        _ => None,
+    })
+    .await;
+    assert_eq!(status, OnlineStatus::Online);
+
+    wait_for(&mut alice_events, |e| {
+        matches!(e, Event::SharesScanned { .. }).then_some(())
+    })
+    .await;
+    // Alice's SharedFoldersFiles travels on her own connection, so the
+    // server may see Bob's request first; ask until it has arrived.
+    let mut stats = UserStats::default();
+    for _ in 0..50 {
+        bob.user_stats("alice").unwrap();
+        stats = wait_for(&mut bob_events, |e| match e {
+            Event::ServerMessage(ServerResponse::UserStats { username, stats })
+                if username == "alice" =>
+            {
+                Some(stats)
+            }
+            _ => None,
+        })
+        .await;
+        if stats.files == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!((stats.files, stats.dirs), (1, 1));
     std::fs::remove_dir_all(root).unwrap();
 }

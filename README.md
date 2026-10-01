@@ -38,6 +38,9 @@ you type `seekr`, search, and download whole albums in a few keystrokes.
   cover art and lyrics next to them.
 - **Browse users:** `b` on any search result opens that user's whole share as the
   same folder tree, with the format filter and one-key downloads.
+- **Buddies:** keep a list of users and see live whether they are online, away or
+  offline, with their share size and speed. `A` on any search result, download or
+  upload adds that user; `Enter` on a buddy browses their shares.
 - **One-key downloads:** `d` on a file or a whole folder. Interrupted downloads resume
   from where they stopped (`.part` files), and name clashes never overwrite anything.
 - **Transfer view:** live progress, speed, queue position and failure reasons, with
@@ -137,7 +140,8 @@ Without this, you can still download from peers that are reachable themselves.
 | Where | Key | Action |
 |---|---|---|
 | everywhere | `/` | focus the search box |
-| | `Tab`, `Alt-1`–`5`, `F1`–`F5` | switch between Search, Downloads, Uploads, Settings and Browse |
+| | `Tab`, `Alt-1`–`6`, `F1`–`F6` | switch between Search, Downloads, Uploads, Settings, Browse and Buddies |
+| | `A` | add the user of the selected result, download or upload as a buddy |
 | | `q`, `Ctrl-c` | quit (`q` asks again while transfers are running) |
 | lists | `10j`, `10k`, `10↑` … | vim-style counts: move 10 rows (the count shows bottom left) |
 | | `5G` | jump to row 5 |
@@ -159,6 +163,9 @@ Without this, you can still download from peers that are reachable themselves.
 | | `x` | clear finished uploads |
 | settings | `Enter` | edit the selected folder or port (`Tab` completes paths), toggle UPnP |
 | | `a` / `x` | add or remove a shared folder |
+| buddies | `a` | type a username to add (`Enter` adds it) |
+| | `x` | remove the selected buddy |
+| | `Enter`, `b` | browse the buddy's shares |
 
 ### Command line
 
@@ -195,6 +202,7 @@ server = "server.slsknet.org:2242"      # default
 |---|---|
 | `~/.config/seekr/config.toml` | login and settings |
 | `~/.local/share/seekr/downloads.json` | the download list |
+| `~/.local/share/seekr/buddies.json` | the buddy list |
 | `~/.cache/seekr/shares.json` | cached audio properties of shared files |
 | `~/.local/state/seekr/seekr.log` | log of the last TUI session (`RUST_LOG=debug` for more) |
 

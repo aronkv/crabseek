@@ -1,6 +1,7 @@
 //! The terminal UI: log in, search, pick files or folders, watch downloads.
 
 mod app;
+mod buddies;
 mod login;
 mod results;
 mod settings;
@@ -96,13 +97,16 @@ async fn login_then_run(
                     }
                     let downloads_path = config::downloads_path()?;
                     let saved = crate::persist::load(&downloads_path);
+                    let buddies_path = config::buddies_path()?;
+                    let buddies = crate::persist::load_buddies(&buddies_path);
                     let app = App::new(
                         client,
                         cfg.username.clone(),
                         &cfg,
                         saved,
                         Some(downloads_path),
-                    )?;
+                    )?
+                    .with_buddies(buddies, Some(buddies_path));
                     return event_loop(terminal, &mut input, app, events).await;
                 }
                 Err(e) => {
@@ -438,6 +442,69 @@ mod tests {
                 "Music\\Aphex Twin\\SAW 85-92\\01 - Xtal.flac".to_owned()
             )]
         );
+    }
+
+    #[test]
+    fn buddies_tab() {
+        use crossterm::event::KeyModifiers;
+        use seekr_proto::server::{OnlineStatus, ServerResponse, UserStats, WatchedUser};
+
+        let mut app = app_with_results();
+        // `A` on a search result adds its user.
+        app.on_key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT));
+        assert_eq!(app.status, "added alice to buddies");
+        app.on_key(KeyEvent::new(KeyCode::Char('A'), KeyModifiers::SHIFT));
+        assert_eq!(app.status, "alice is already a buddy");
+
+        // `a` on the Buddies tab asks for a name; digits are typed, not counts.
+        app.on_key(KeyEvent::from(KeyCode::F(6)));
+        assert_eq!(app.tab, Tab::Buddies);
+        app.on_key(KeyEvent::from(KeyCode::Char('a')));
+        for c in "bob2".chars() {
+            app.on_key(KeyEvent::from(KeyCode::Char(c)));
+        }
+        assert!(draw(&mut app).contains("Add buddy"));
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(app.status, "added bob2 to buddies");
+        assert_eq!(app.tab, Tab::Buddies);
+
+        app.on_event(Event::ServerMessage(ServerResponse::WatchUser {
+            username: "alice".into(),
+            user: Some(WatchedUser {
+                status: OnlineStatus::Online,
+                stats: UserStats {
+                    avg_speed: 1_500_000,
+                    upload_num: 0,
+                    files: 12_345,
+                    dirs: 830,
+                },
+                country: Some("HU".into()),
+            }),
+        }));
+        app.on_event(Event::ServerMessage(ServerResponse::WatchUser {
+            username: "bob2".into(),
+            user: None,
+        }));
+        let screen = draw(&mut app);
+        println!("{screen}");
+        assert!(screen.contains("Buddies (1/2 online)"));
+        assert!(screen.contains("6 Buddies (1)"));
+        assert!(screen.contains("●  online        alice"));
+        assert!(screen.contains("12345 files · 830 dirs"));
+        assert!(screen.contains("HU"));
+        assert!(screen.contains("✗  no such user  bob2"));
+
+        app.on_event(Event::ServerMessage(ServerResponse::UserStatus {
+            username: "alice".into(),
+            status: OnlineStatus::Away,
+            privileged: false,
+        }));
+        assert!(draw(&mut app).contains("◐  away"));
+
+        // The cursor is on alice (first row); `x` removes her.
+        app.on_key(KeyEvent::from(KeyCode::Char('x')));
+        assert_eq!(app.status, "removed alice from buddies");
+        assert_eq!(app.buddies.names(), ["bob2"]);
     }
 
     #[test]

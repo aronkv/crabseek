@@ -7,8 +7,10 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Paragraph, Row as TableRow, Table, TableState, Tabs};
 use seekr_net::{DistribStatus, DownloadState, PortMapStatus, UploadState};
+use seekr_proto::server::OnlineStatus;
 
 use super::app::{App, Focus, SharesStatus, Tab};
+use super::buddies::Known;
 use super::results::{FormatFilter, Results, Row};
 use super::settings::Item;
 use crate::config::{self, display_path};
@@ -32,6 +34,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Tab::Uploads => render_uploads(frame, app, body),
         Tab::Browse => render_browse(frame, app, body),
         Tab::Settings => render_settings(frame, app, body),
+        Tab::Buddies => render_buddies(frame, app, body),
     }
     frame.render_widget(
         Paragraph::new(app.status.as_str()).fg(Color::Yellow),
@@ -59,6 +62,7 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
         counted("3 Uploads", app.uploads.active()),
         Line::from(" 4 Settings "),
         Line::from(" 5 Browse "),
+        counted("6 Buddies", app.buddies.online()),
     ];
     let selected = app.tab.index();
     frame.render_widget(
@@ -539,29 +543,142 @@ fn render_uploads(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_stateful_widget(table, inner, &mut state);
 }
 
+fn render_buddies(frame: &mut Frame, app: &mut App, area: Rect) {
+    let list_area = match &app.buddies.adding {
+        Some(input) => {
+            let [input_area, list_area] =
+                Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).areas(area);
+            frame.render_widget(
+                Paragraph::new(input.as_str()).block(
+                    Block::bordered()
+                        .title(" Add buddy ")
+                        .border_style(Style::new().cyan()),
+                ),
+                input_area,
+            );
+            let x = input_area.x + 1 + input.chars().count() as u16;
+            frame.set_cursor_position(Position::new(
+                x.min(input_area.right().saturating_sub(2)),
+                input_area.y + 1,
+            ));
+            list_area
+        }
+        None => area,
+    };
+
+    let b = &app.buddies;
+    let block = Block::bordered()
+        .title(format!(
+            " Buddies ({}/{} online) ",
+            b.online(),
+            b.list.len()
+        ))
+        .border_style(if b.adding.is_some() {
+            Style::new().dark_gray()
+        } else {
+            Style::new().cyan()
+        });
+    let inner = block.inner(list_area);
+    frame.render_widget(block, list_area);
+
+    if b.list.is_empty() {
+        frame.render_widget(
+            Paragraph::new("no buddies yet – press a to add one, or A on a search result")
+                .dark_gray(),
+            inner,
+        );
+        return;
+    }
+
+    let height = inner.height as usize;
+    app.page_size = height;
+    let selected = app.buddies.selected;
+    app.buddies_offset = scroll(app.buddies_offset, selected, height);
+    let offset = app.buddies_offset;
+    let rows: Vec<TableRow> = app
+        .buddies
+        .list
+        .iter()
+        .skip(offset)
+        .take(height)
+        .map(|buddy| {
+            let name = Cell::from(buddy.username.clone()).cyan();
+            match &buddy.known {
+                None => TableRow::new(vec![Cell::from("…  checking").dark_gray(), name]),
+                Some(Known::Missing) => {
+                    TableRow::new(vec![Cell::from("✗  no such user").red(), name])
+                }
+                Some(Known::Exists {
+                    status,
+                    stats,
+                    country,
+                }) => {
+                    let status = match status {
+                        OnlineStatus::Online => Span::raw("●  online").green(),
+                        OnlineStatus::Away => Span::raw("◐  away").yellow(),
+                        OnlineStatus::Offline => Span::raw("○  offline").dark_gray(),
+                    };
+                    let shares = format!("{} files · {} dirs", stats.files, stats.dirs);
+                    let speed = if stats.avg_speed > 0 {
+                        format!("{}/s", human_size(u64::from(stats.avg_speed)))
+                    } else {
+                        String::new()
+                    };
+                    TableRow::new(vec![
+                        Cell::from(status),
+                        name,
+                        Cell::from(shares).dark_gray(),
+                        Cell::from(speed).dark_gray(),
+                        Cell::from(country.clone().unwrap_or_default()).dark_gray(),
+                    ])
+                }
+            }
+        })
+        .collect();
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(16),
+            Constraint::Length(24),
+            Constraint::Length(26),
+            Constraint::Length(12),
+            Constraint::Fill(1),
+        ],
+    )
+    .row_highlight_style(SELECTED);
+    let mut state = TableState::new().with_selected(Some(selected - offset));
+    frame.render_stateful_widget(table, inner, &mut state);
+}
+
 fn help_line(app: &App) -> &'static str {
     match (app.tab, app.focus) {
         (Tab::Search, Focus::Input) => " Enter search · Esc results · Ctrl-u clear · Ctrl-c quit",
         (Tab::Search, Focus::List) => {
-            " 10j/10k jump · j/k move · Enter open folder · h/l collapse/expand · d download · b browse user · f/F format filter · / search · Tab/Alt-1…5 tabs · q quit"
+            " 10j/10k jump · j/k move · Enter open folder · h/l collapse/expand · d download · b browse user · A add buddy · f/F format filter · / search · Tab/Alt-1…6 tabs · q quit"
         }
         (Tab::Transfers, _) => {
-            " j/k move · c cancel · r retry failed · x clear finished · / search · Tab/Alt-1…5 tabs · q quit"
+            " j/k move · c cancel · r retry failed · x clear finished · A add buddy · / search · Tab/Alt-1…6 tabs · q quit"
         }
         (Tab::Browse, _) if app.browse_focus == Focus::Input => {
             " Enter browse user · Esc list · Ctrl-u clear · Ctrl-c quit"
         }
         (Tab::Browse, _) => {
-            " j/k move · Enter open folder · d download · f/F format filter · / other user · Tab/Alt-1…5 tabs · q quit"
+            " j/k move · Enter open folder · d download · A add buddy · f/F format filter · / other user · Tab/Alt-1…6 tabs · q quit"
         }
         (Tab::Uploads, _) => {
-            " j/k move · c cancel · x clear finished · / search · Tab/Alt-1…5 tabs · q quit"
+            " j/k move · c cancel · x clear finished · A add buddy · / search · Tab/Alt-1…6 tabs · q quit"
         }
         (Tab::Settings, _) if app.settings.is_editing() => {
             " Tab complete folder · Enter save · Esc cancel · Ctrl-u clear"
         }
         (Tab::Settings, _) => {
-            " j/k move · Enter edit/toggle · a add shared folder · x remove · / search · Tab/Alt-1…5 tabs · q quit"
+            " j/k move · Enter edit/toggle · a add shared folder · x remove · / search · Tab/Alt-1…6 tabs · q quit"
+        }
+        (Tab::Buddies, _) if app.buddies.adding.is_some() => {
+            " Enter add buddy · Esc cancel · Ctrl-u clear · Ctrl-c quit"
+        }
+        (Tab::Buddies, _) => {
+            " j/k move · a add buddy · x remove · Enter/b browse shares · / search · Tab/Alt-1…6 tabs · q quit"
         }
     }
 }

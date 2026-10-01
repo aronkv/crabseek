@@ -1,7 +1,8 @@
 //! The download list, kept in `~/.local/share/seekr/downloads.json` so a
 //! restart does not lose it. Unfinished downloads are queued again on the
 //! next start and resume from their `.part` files, like Nicotine+ does
-//! with its `downloads.json`.
+//! with its `downloads.json`. The buddy list sits next to it in
+//! `buddies.json`.
 
 use std::path::{Path, PathBuf};
 
@@ -56,6 +57,25 @@ pub fn save(path: &Path, list: &[SavedDownload]) -> anyhow::Result<()> {
     config::write_private(path, &serde_json::to_string_pretty(list)?)
 }
 
+/// Saved buddy names; empty if there are none or the file is unreadable.
+pub fn load_buddies(path: &Path) -> Vec<String> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
+            tracing::warn!(%e, "saved buddies are corrupt");
+            Vec::new()
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+        Err(e) => {
+            tracing::warn!(%e, "could not read the saved buddies");
+            Vec::new()
+        }
+    }
+}
+
+pub fn save_buddies(path: &Path, names: &[String]) -> anyhow::Result<()> {
+    config::write_private(path, &serde_json::to_string_pretty(names)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,6 +115,17 @@ mod tests {
         std::fs::write(&path, "{ not json").unwrap();
         assert!(load(&path).is_empty());
         assert!(path.with_extension("json.broken").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn buddies_roundtrip() {
+        let dir = std::env::temp_dir().join(format!("seekr-buddies-{}", std::process::id()));
+        let path = dir.join("buddies.json");
+        assert!(load_buddies(&path).is_empty());
+        let names = vec!["alice".to_owned(), "bob".to_owned()];
+        save_buddies(&path, &names).unwrap();
+        assert_eq!(load_buddies(&path), names);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

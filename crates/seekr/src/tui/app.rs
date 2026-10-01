@@ -6,8 +6,10 @@ use std::time::Instant;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use seekr_net::{Client, DistribStatus, DownloadState, Event, PortMapStatus};
 use seekr_proto::search::{SearchFile, SearchResponse};
+use seekr_proto::server::ServerResponse;
 use seekr_proto::shares::SharedFileList;
 
+use super::buddies::Buddies;
 use super::results::Results;
 use super::settings::{Settings, SettingsAction};
 use super::transfers::Transfers;
@@ -22,16 +24,18 @@ pub enum Tab {
     Uploads,
     Settings,
     Browse,
+    Buddies,
 }
 
 impl Tab {
-    /// Tab-bar order; the numbers (`Alt-1`…`Alt-5`) follow it.
-    const ORDER: [Tab; 5] = [
+    /// Tab-bar order; the numbers (`Alt-1`…`Alt-6`) follow it.
+    const ORDER: [Tab; 6] = [
         Tab::Search,
         Tab::Transfers,
         Tab::Uploads,
         Tab::Settings,
         Tab::Browse,
+        Tab::Buddies,
     ];
 
     pub fn index(self) -> usize {
@@ -96,6 +100,8 @@ pub struct App {
     pub transfers_offset: usize,
     pub uploads: Uploads,
     pub uploads_offset: usize,
+    pub buddies: Buddies,
+    pub buddies_offset: usize,
     pub shares: SharesStatus,
     pub distrib: DistribStatus,
     pub portmap: PortMapStatus,
@@ -109,6 +115,8 @@ pub struct App {
     pub quit: bool,
     /// Where the download list is saved; `None` in tests.
     downloads_path: Option<PathBuf>,
+    /// Where the buddy list is saved; `None` in tests.
+    buddies_path: Option<PathBuf>,
     confirm_quit: bool,
     /// Vim-style count typed before a motion (`10k`).
     pub count: Option<usize>,
@@ -140,6 +148,8 @@ impl App {
             transfers_offset: 0,
             uploads: Uploads::default(),
             uploads_offset: 0,
+            buddies: Buddies::default(),
+            buddies_offset: 0,
             shares: SharesStatus::Scanning,
             distrib: DistribStatus::Searching,
             portmap: if cfg.upnp {
@@ -161,6 +171,7 @@ impl App {
             confirm_quit: false,
             count: None,
             downloads_path,
+            buddies_path: None,
         };
         app.restore(saved);
         Ok(app)
@@ -203,6 +214,72 @@ impl App {
         self.transfers.dirty = false;
         if requeued > 0 {
             self.status = format!("resuming {requeued} unfinished downloads from last time");
+        }
+    }
+
+    /// Puts the saved buddies on the list and starts watching them.
+    pub fn with_buddies(mut self, names: Vec<String>, path: Option<PathBuf>) -> Self {
+        for name in &names {
+            let _ = self.client.watch_user(name);
+        }
+        self.buddies = Buddies::new(names);
+        self.buddies_path = path;
+        self
+    }
+
+    fn add_buddy(&mut self, username: &str) {
+        let username = username.trim();
+        self.status = if username.is_empty() {
+            return;
+        } else if username == self.username {
+            "you cannot add yourself".to_owned()
+        } else if !self.buddies.add(username.to_owned()) {
+            format!("{username} is already a buddy")
+        } else {
+            let _ = self.client.watch_user(username);
+            self.save_buddies(format!("added {username} to buddies"))
+        };
+    }
+
+    fn remove_selected_buddy(&mut self) {
+        if let Some(username) = self.buddies.remove_selected() {
+            let _ = self.client.unwatch_user(&username);
+            self.status = self.save_buddies(format!("removed {username} from buddies"));
+        }
+    }
+
+    /// Returns `done`, or the error if saving failed.
+    fn save_buddies(&self, done: String) -> String {
+        let Some(path) = &self.buddies_path else {
+            return done;
+        };
+        match persist::save_buddies(path, &self.buddies.names()) {
+            Ok(()) => done,
+            Err(e) => format!("could not save the buddy list: {e:#}"),
+        }
+    }
+
+    /// The server does not push stat changes for watched users, so they
+    /// are fetched again whenever the Buddies tab is opened.
+    fn refresh_buddy_stats(&self) {
+        for b in &self.buddies.list {
+            let _ = self.client.user_stats(&b.username);
+        }
+    }
+
+    /// The user of the selected row on the current tab, for `A`.
+    fn selected_user(&mut self) -> Option<String> {
+        match self.tab {
+            Tab::Search => self
+                .results
+                .selection_files()
+                .into_iter()
+                .next()
+                .map(|(user, _)| user),
+            Tab::Browse => self.browse.as_ref().map(|b| b.username.clone()),
+            Tab::Transfers => self.transfers.selected().map(|t| t.username.clone()),
+            Tab::Uploads => self.uploads.selected().map(|u| u.username.clone()),
+            Tab::Settings | Tab::Buddies => None,
         }
     }
 
@@ -292,6 +369,15 @@ impl App {
                 self.connected = false;
                 self.status = format!("disconnected from server: {reason}");
             }
+            Event::ServerMessage(ServerResponse::WatchUser { username, user }) => {
+                self.buddies.on_watch(&username, user)
+            }
+            Event::ServerMessage(ServerResponse::UserStatus {
+                username, status, ..
+            }) => self.buddies.on_status(&username, status),
+            Event::ServerMessage(ServerResponse::UserStats { username, stats }) => {
+                self.buddies.on_stats(&username, stats)
+            }
             _ => {}
         }
     }
@@ -319,6 +405,10 @@ impl App {
             self.on_settings_key(key);
             return;
         }
+        if self.tab == Tab::Buddies && self.buddies.adding.is_some() {
+            self.on_buddy_input_key(key);
+            return;
+        }
 
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         // Digits build a count for the next motion, like in vim.
@@ -331,6 +421,7 @@ impl App {
             return;
         }
         let count = self.count.take();
+        let tab_before = self.tab;
 
         match key.code {
             KeyCode::Char('q') => self.request_quit(),
@@ -341,6 +432,13 @@ impl App {
             KeyCode::Char('3') | KeyCode::F(3) => self.tab = Tab::Uploads,
             KeyCode::Char('4') | KeyCode::F(4) => self.tab = Tab::Settings,
             KeyCode::Char('5') | KeyCode::F(5) => self.tab = Tab::Browse,
+            KeyCode::Char('6') | KeyCode::F(6) => self.tab = Tab::Buddies,
+            // `A` adds the user of the selected row as a buddy.
+            KeyCode::Char('A') => {
+                if let Some(user) = self.selected_user() {
+                    self.add_buddy(&user);
+                }
+            }
             // `/` edits the input of the current tab, or starts a search.
             KeyCode::Char('/') if self.tab == Tab::Browse => self.browse_focus = Focus::Input,
             KeyCode::Char('/') => {
@@ -352,6 +450,7 @@ impl App {
                 Tab::Browse => self.on_results_key(key, count, Which::Browse),
                 Tab::Transfers => self.on_transfers_key(key, count),
                 Tab::Uploads => self.on_uploads_key(key, count),
+                Tab::Buddies => self.on_buddies_key(key, count),
                 Tab::Settings => {
                     // Settings moves one row per key; repeat for a count.
                     let times = if matches!(
@@ -367,6 +466,54 @@ impl App {
                     }
                 }
             },
+        }
+        if self.tab == Tab::Buddies && tab_before != Tab::Buddies {
+            self.refresh_buddy_stats();
+        }
+    }
+
+    fn on_buddies_key(&mut self, key: KeyEvent, count: Option<usize>) {
+        let n = count.unwrap_or(1) as isize;
+        let page = self.page_size.max(1) as isize * n;
+        let b = &mut self.buddies;
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => b.move_by(n),
+            KeyCode::Up | KeyCode::Char('k') => b.move_by(-n),
+            KeyCode::PageDown => b.move_by(page),
+            KeyCode::PageUp => b.move_by(-page),
+            KeyCode::Home | KeyCode::Char('g') => b.selected = 0,
+            KeyCode::End | KeyCode::Char('G') => match count {
+                Some(line) => b.selected = (line - 1).min(b.list.len().saturating_sub(1)),
+                None => b.move_by(isize::MAX),
+            },
+            KeyCode::Char('a') => b.adding = Some(String::new()),
+            KeyCode::Char('x') => self.remove_selected_buddy(),
+            KeyCode::Enter | KeyCode::Char('b') => {
+                if let Some(user) = self.buddies.selected().map(|b| b.username.clone()) {
+                    self.start_browse(user);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn on_buddy_input_key(&mut self, key: KeyEvent) {
+        let Some(input) = &mut self.buddies.adding else {
+            return;
+        };
+        match key.code {
+            KeyCode::Enter => {
+                let name = std::mem::take(input);
+                self.buddies.adding = None;
+                self.add_buddy(&name);
+            }
+            KeyCode::Esc => self.buddies.adding = None,
+            KeyCode::Backspace => {
+                input.pop();
+            }
+            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => input.clear(),
+            KeyCode::Char(c) => input.push(c),
+            _ => {}
         }
     }
 

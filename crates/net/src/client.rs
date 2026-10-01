@@ -364,6 +364,30 @@ impl Client {
             .send(Internal::CancelDownload { id })
             .map_err(|_| ShutDown)
     }
+
+    /// Follows `username`'s status. The server answers with
+    /// [`ServerResponse::WatchUser`] and later sends
+    /// [`ServerResponse::UserStatus`] on every change; both arrive as
+    /// [`Event::ServerMessage`].
+    pub fn watch_user(&self, username: impl Into<String>) -> Result<(), ShutDown> {
+        self.send_server(ServerRequest::WatchUser(username.into()))
+    }
+
+    pub fn unwatch_user(&self, username: impl Into<String>) -> Result<(), ShutDown> {
+        self.send_server(ServerRequest::UnwatchUser(username.into()))
+    }
+
+    /// Asks for `username`'s current stats, which the server does not push
+    /// for watched users. The answer is [`ServerResponse::UserStats`].
+    pub fn user_stats(&self, username: impl Into<String>) -> Result<(), ShutDown> {
+        self.send_server(ServerRequest::GetUserStats(username.into()))
+    }
+
+    fn send_server(&self, msg: ServerRequest) -> Result<(), ShutDown> {
+        self.tx
+            .send(Internal::SendServer(msg))
+            .map_err(|_| ShutDown)
+    }
 }
 
 /// Tokens for searches and connection requests. They only need to be
@@ -388,6 +412,7 @@ impl Tokens {
 
 /// Everything the actor reacts to, from callers and from its own tasks.
 pub(crate) enum Internal {
+    SendServer(ServerRequest),
     SendPeer {
         username: String,
         msg: PeerMsg,
@@ -556,6 +581,7 @@ impl Actor {
     async fn run(mut self, mut rx: mpsc::UnboundedReceiver<Internal>) {
         while let Some(msg) = rx.recv().await {
             match msg {
+                Internal::SendServer(msg) => self.send_server(msg).await,
                 Internal::SendPeer { username, msg } => self.send_peer(username, msg).await,
                 Internal::Search { token, query } => {
                     self.searches.insert(token);
