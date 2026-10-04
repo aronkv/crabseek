@@ -10,21 +10,6 @@
 
 </div>
 
-```
-  1 Search  2 Downloads (3)  3 Uploads  4 Browse  5 Chat  6 Buddies  7 Wishlist  8 Settings  me ● online
-┌ Search ────────────────────────────────────────────────────────────────────────────────────┐
-│boards of canada                                                                            │
-└────────────────────────────────────────────────────────────────────────────────────────────┘
-┌ "boards of canada": 659 users, 49925 files (10s) · [FLAC] 412 folders ─────────────────────┐
-│▾ Boards of Canada\Geogaddi  (24)        FLAC 16/44.1 ~903k     512.3 MB  alice             │
-│    01 - Ready Lets Go.flac              16/44.1 ~1006k 4:22    4.4 MB                      │
-│    02 - Music Is Math.flac              16/44.1 ~836k 5:41     33.6 MB                     │
-│▸ Tomorrow's Harvest  (17)               FLAC 24/44.1 ~1914k    643.5 MB  bob               │
-│▸ Music Has the Right to Children  (19)  MP3 320k               151.2 MB  carol             │
-└────────────────────────────────────────────────────────────────────────────────────────────┘
- ? help · q quit · Tab/Alt-1…8 tabs · 10j/10k jump · Enter open folder · d download · w wishlist
-```
-
 crabseek speaks the Soulseek protocol natively. There is no daemon, web UI or Python runtime:
 you type `crabseek`, search, and download whole albums in a few keystrokes.
 
