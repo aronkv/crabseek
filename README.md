@@ -179,7 +179,7 @@ Without this, you can still download from peers that are reachable themselves.
 | Where | Key | Action |
 |---|---|---|
 | everywhere | `s`, `/` | open the search box (crabseek starts in the results list) |
-| | `?` | explain the current tab: what it is for, how it works, its keys |
+| | `?` | explain the current tab: what it is for, how it works, its keys (`j`/`k`, `PgUp`/`PgDn` scroll) |
 | | `Alt-s` | toggle between the search box and the results, also while typing |
 | | `Tab`, `Alt-1`–`8`, `F1`–`F8` | switch between Search, Downloads, Uploads, Browse, Chat, Buddies, Wishlist and Settings |
 | | `m` | write a private message to the user of the selected row |

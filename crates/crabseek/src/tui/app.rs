@@ -152,6 +152,10 @@ pub struct App {
     pub count: Option<usize>,
     /// The `?` help window is open.
     pub help: bool,
+    /// Lines the help window is scrolled down; clamped when drawn.
+    pub help_scroll: u16,
+    /// Lines the help window shows at once, for PgUp/PgDn.
+    pub help_page: u16,
     /// Running in the background process: `q` and Ctrl-C detach the
     /// terminal instead of quitting, `Q` quits for good.
     pub background: bool,
@@ -212,6 +216,8 @@ impl App {
             confirm_quit: false,
             count: None,
             help: false,
+            help_scroll: 0,
+            help_page: 0,
             background: false,
             detach: false,
             download_batch: DownloadBatch::default(),
@@ -585,8 +591,17 @@ impl App {
         }
         if self.help {
             // The help window swallows keys until it is closed.
-            if matches!(key.code, KeyCode::Esc | KeyCode::Char('?' | 'q')) {
-                self.help = false;
+            let page = self.help_page.saturating_sub(1).max(1);
+            let s = &mut self.help_scroll;
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('?' | 'q') => self.help = false,
+                KeyCode::Down | KeyCode::Char('j') => *s = s.saturating_add(1),
+                KeyCode::Up | KeyCode::Char('k') => *s = s.saturating_sub(1),
+                KeyCode::PageDown | KeyCode::Char(' ') => *s = s.saturating_add(page),
+                KeyCode::PageUp => *s = s.saturating_sub(page),
+                KeyCode::Home | KeyCode::Char('g') => *s = 0,
+                KeyCode::End | KeyCode::Char('G') => *s = u16::MAX,
+                _ => {}
             }
             return;
         }
@@ -644,6 +659,7 @@ impl App {
         if key.code == KeyCode::Char('?') {
             self.count = None;
             self.help = true;
+            self.help_scroll = 0;
             return;
         }
         let count = self.count.take();

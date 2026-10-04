@@ -67,7 +67,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     frame.render_widget(Paragraph::new(Line::from(help_spans)), help);
 
     if app.help {
-        super::help::render(frame, app.tab);
+        super::help::render(frame, app);
     }
 }
 

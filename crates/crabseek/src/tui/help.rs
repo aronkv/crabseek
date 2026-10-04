@@ -7,7 +7,7 @@ use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 
-use super::app::Tab;
+use super::app::{App, Tab};
 
 struct Page {
     title: &'static str,
@@ -183,7 +183,10 @@ const GENERAL: &[(&str, &str)] = &[
     ("j / k, ↓ / ↑, PgUp / PgDn, g / G", "move"),
     ("10j, 10k, 5G", "vim counts: move 10 rows, jump to row 5"),
     ("Alt-s", "jump to the search box from anywhere"),
-    ("?", "this help (Esc or ? closes it)"),
+    (
+        "?",
+        "this help (j / k or PgUp / PgDn scroll, Esc or ? closes)",
+    ),
     (
         "q / Ctrl-c",
         "quit (asks again while transfers run); in background mode: detach",
@@ -207,8 +210,10 @@ fn key_lines(keys: &[(&str, &str)]) -> Vec<Line<'static>> {
         .collect()
 }
 
-pub fn render(frame: &mut Frame, tab: Tab) {
-    let page = page(tab);
+/// Draws the help for `app.tab`: as tall as its text up to the terminal's
+/// height, and scrolled by `app.help_scroll` (clamped here) when longer.
+pub fn render(frame: &mut Frame, app: &mut App) {
+    let page = page(app.tab);
     let mut lines: Vec<Line> = Vec::new();
     for paragraph in page.about {
         lines.push(Line::from(*paragraph));
@@ -220,19 +225,34 @@ pub fn render(frame: &mut Frame, tab: Tab) {
     lines.push(Line::from("Everywhere").bold());
     lines.extend(key_lines(GENERAL));
 
-    let area = centered(frame.area(), 86, 30);
+    let screen = frame.area();
+    let width = WIDTH.min(screen.width);
+    // Borders and the one-column padding on each side.
+    let text = Paragraph::new(lines).wrap(Wrap { trim: false });
+    let total = u16::try_from(text.line_count(width.saturating_sub(4))).unwrap_or(u16::MAX);
+    let area = centered(screen, width, total.saturating_add(2));
+    let shown = area.height.saturating_sub(2);
+    app.help_page = shown;
+    app.help_scroll = app.help_scroll.min(total.saturating_sub(shown));
+    let hint = if total > shown {
+        " Esc or ? closes · j/k PgUp/PgDn scroll "
+    } else {
+        " Esc or ? closes "
+    };
     frame.render_widget(Clear, area);
     frame.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+        text.scroll((app.help_scroll, 0)).block(
             Block::bordered()
                 .title(format!(" Help – {} ", page.title).bold())
-                .title_bottom(Line::from(" Esc or ? closes ").dark_gray())
+                .title_bottom(Line::from(hint).dark_gray())
                 .border_style(Style::new().cyan())
                 .padding(ratatui::widgets::Padding::horizontal(1)),
         ),
         area,
     );
 }
+
+const WIDTH: u16 = 86;
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {
     let [area] = Layout::horizontal([Constraint::Length(width.min(area.width))])

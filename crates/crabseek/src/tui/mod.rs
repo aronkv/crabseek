@@ -862,6 +862,30 @@ mod tests {
     }
 
     #[test]
+    fn help_window_scrolls_on_a_short_terminal() {
+        let mut app = app_with_results();
+        app.on_key(KeyEvent::from(KeyCode::Char('?')));
+        let last = "quit, also in background mode";
+        let screen = draw(&mut app);
+        assert!(screen.contains("Help – Search"));
+        assert!(screen.contains("PgUp/PgDn scroll"));
+        assert!(!screen.contains(last));
+        app.on_key(KeyEvent::from(KeyCode::Char('G')));
+        let screen = draw(&mut app);
+        println!("{screen}");
+        assert!(screen.contains(last), "the end of the help is reachable");
+        // Clamped at the end, so one k scrolls back at once.
+        let end = app.help_scroll;
+        app.on_key(KeyEvent::from(KeyCode::Char('k')));
+        assert_eq!(app.help_scroll, end - 1);
+        // Reopening starts from the top.
+        app.on_key(KeyEvent::from(KeyCode::Esc));
+        app.on_key(KeyEvent::from(KeyCode::Char('?')));
+        assert!(draw(&mut app).contains("Help – Search"));
+        assert_eq!(app.help_scroll, 0);
+    }
+
+    #[test]
     fn help_window_and_list_focus_on_start() {
         use crossterm::event::KeyModifiers;
         let mut app = App::new(

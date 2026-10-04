@@ -20,7 +20,7 @@ crossterm = { version = "0.29", features = ["event-stream", "serde"] }
 directories = "6.0.0"
 futures = "0.3.34"
 notify-rust = "4.17.0"
-ratatui = "0.30.2"
+ratatui = { version = "0.30.2", features = ["unstable-rendered-line-info"] }
 crabseek-net = { version = "0.1.0", path = "../net" }
 crabseek-proto = { version = "0.1.0", path = "../proto" }
 serde = { version = "1.0.229", features = ["derive"] }
