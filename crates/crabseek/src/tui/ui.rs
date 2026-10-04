@@ -510,7 +510,7 @@ fn render_transfers(frame: &mut Frame, app: &mut App, area: Rect) {
                     ),
                     DownloadState::Completed { .. } => (
                         Span::raw("done").green(),
-                        progress_bar(1, 1, cols.bar),
+                        finished_bar(cols.bar),
                         String::new(),
                     ),
                     DownloadState::Failed { .. } => {
@@ -685,7 +685,7 @@ fn render_uploads(frame: &mut Frame, app: &mut App, area: Rect) {
                 ),
                 UploadState::Completed => (
                     Span::raw("done").green(),
-                    progress_bar(1, 1, cols.bar),
+                    finished_bar(cols.bar),
                     String::new(),
                 ),
                 UploadState::Failed { reason } => (
@@ -1380,6 +1380,11 @@ fn ellipsis_start(s: &str, width: usize) -> String {
     let mut out = String::from(if width > 0 { "…" } else { "" });
     out.extend(tail.into_iter().rev());
     out
+}
+
+/// A full bar, dim: finished rows stay quiet next to active ones.
+fn finished_bar(width: usize) -> Line<'static> {
+    Line::from(format!("{} 100%", "━".repeat(width))).dark_gray()
 }
 
 /// The last `n` path components, e.g. `Artist\Album`.

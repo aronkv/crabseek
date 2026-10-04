@@ -472,6 +472,52 @@ mod tests {
     }
 
     #[test]
+    fn finished_downloads_have_a_dim_bar() {
+        use ratatui::style::Color;
+        let mut app = app_with_results();
+        app.tab = Tab::Transfers;
+        // The selected first row is the active one; its bar colours are
+        // overridden by the selection.
+        for (id, state) in [
+            (
+                1,
+                DownloadState::Transferring {
+                    received: 1,
+                    size: 2,
+                },
+            ),
+            (
+                2,
+                DownloadState::Completed {
+                    path: PathBuf::from("/tmp/02.flac"),
+                },
+            ),
+        ] {
+            app.on_event(Event::Download {
+                id,
+                username: "alice".into(),
+                filename: format!("a\\0{id}.flac"),
+                state,
+            });
+        }
+        let mut terminal = Terminal::new(TestBackend::new(110, 16)).unwrap();
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let buf = terminal.backend().buffer();
+        let row = |y: u16| {
+            (0..buf.area.width)
+                .map(|x| buf[(x, y)].symbol())
+                .collect::<String>()
+        };
+        let y = (0..buf.area.height)
+            .find(|&y| row(y).contains("done"))
+            .unwrap();
+        let x = (0..buf.area.width)
+            .find(|&x| buf[(x, y)].symbol() == "━")
+            .unwrap();
+        assert_eq!(buf[(x, y)].fg, Color::DarkGray, "{}", row(y));
+    }
+
+    #[test]
     fn renders_transfers() {
         let mut app = app_with_results();
         app.tab = Tab::Transfers;
