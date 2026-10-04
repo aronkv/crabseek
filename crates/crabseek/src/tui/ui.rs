@@ -1066,52 +1066,54 @@ fn render_buddies(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_stateful_widget(table, inner, &mut state);
 }
 
+/// Keys for the current tab and focus, the global ones first, so a
+/// narrow terminal cuts the least important.
 fn help_line(app: &App) -> &'static str {
     match (app.tab, app.focus) {
         (Tab::Search, Focus::Input) => {
-            " Enter search · Esc/Alt-s results · Ctrl-u clear · Ctrl-c quit"
+            " Ctrl-c quit · Enter search · Esc/Alt-s results · Ctrl-u clear"
         }
         (Tab::Search, Focus::List) => {
-            " 10j/10k jump · j/k move · Enter open folder · h/l collapse/expand · d download · w wishlist · b browse user · A add buddy · f/F format filter · s search · Tab/Alt-1…8 tabs · q quit"
+            " q quit · Tab/Alt-1…8 tabs · 10j/10k jump · j/k move · Enter open folder · h/l collapse/expand · d download · w wishlist · b browse user · A add buddy · f/F format filter · s search"
         }
         (Tab::Transfers, _) => {
-            " j/k move · c cancel · r retry failed · x clear finished · A add buddy · s search · Tab/Alt-1…8 tabs · q quit"
+            " q quit · Tab/Alt-1…8 tabs · j/k move · c cancel · r retry failed · x clear finished · A add buddy · s search"
         }
         (Tab::Browse, _) if app.browse_focus == Focus::Input => {
-            " Enter browse user · Esc list · Ctrl-u clear · Ctrl-c quit"
+            " Ctrl-c quit · Enter browse user · Esc list · Ctrl-u clear"
         }
         (Tab::Browse, _) => {
-            " j/k move · Enter open folder · d download · A add buddy · f/F format filter · / other user · Tab/Alt-1…8 tabs · q quit"
+            " q quit · Tab/Alt-1…8 tabs · j/k move · Enter open folder · d download · A add buddy · f/F format filter · / other user"
         }
         (Tab::Uploads, _) => {
-            " j/k move · c cancel · x clear finished · A add buddy · s search · Tab/Alt-1…8 tabs · q quit"
+            " q quit · Tab/Alt-1…8 tabs · j/k move · c cancel · x clear finished · A add buddy · s search"
         }
         (Tab::Settings, _) if app.settings.is_editing() => {
             " Tab complete folder · Enter save · Esc cancel · Ctrl-u clear"
         }
         (Tab::Settings, _) => {
-            " j/k move · Enter edit/toggle · a add shared folder · x remove · s search · Tab/Alt-1…8 tabs · q quit"
+            " q quit · Tab/Alt-1…8 tabs · j/k move · Enter edit/toggle · a add shared folder · x remove · s search"
         }
         (Tab::Buddies, _) if app.buddies.adding.is_some() => {
-            " Enter add buddy · Esc cancel · Ctrl-u clear · Ctrl-c quit"
+            " Ctrl-c quit · Enter add buddy · Esc cancel · Ctrl-u clear"
         }
         (Tab::Buddies, _) => {
-            " j/k move · a add buddy · x remove · Enter/b browse shares · s search · Tab/Alt-1…8 tabs · q quit"
+            " q quit · Tab/Alt-1…8 tabs · j/k move · a add buddy · x remove · Enter/b browse shares · s search"
         }
         (Tab::Chat, _) if matches!(app.chats.input, Some(ChatInput::NewUser(_))) => {
-            " Enter open conversation · Esc cancel · Ctrl-u clear · Ctrl-c quit"
+            " Ctrl-c quit · Enter open conversation · Esc cancel · Ctrl-u clear"
         }
         (Tab::Chat, _) if app.chats.input.is_some() => {
-            " Enter send · Esc stop typing · Ctrl-u clear · Ctrl-c quit"
+            " Ctrl-c quit · Enter send · Esc stop typing · Ctrl-u clear"
         }
         (Tab::Chat, _) => {
-            " j/k conversation · PgUp/PgDn scroll · Enter/i write · a new conversation · b browse · x delete · m on other tabs · Tab/Alt-1…8 tabs · q quit"
+            " q quit · Tab/Alt-1…8 tabs · j/k conversation · PgUp/PgDn scroll · Enter/i write · a new conversation · b browse · x delete · m on other tabs"
         }
         (Tab::Wishlist, _) if app.wishlist.adding.is_some() => {
-            " Enter add to wishlist · Esc cancel · Ctrl-u clear · Ctrl-c quit"
+            " Ctrl-c quit · Enter add to wishlist · Esc cancel · Ctrl-u clear"
         }
         (Tab::Wishlist, _) => {
-            " j/k move · Enter open results · a add · r run now · x remove · w on a search adds it · Tab/Alt-1…8 tabs · q quit"
+            " q quit · Tab/Alt-1…8 tabs · j/k move · Enter open results · a add · r run now · x remove · w on a search adds it"
         }
     }
 }

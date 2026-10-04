@@ -461,6 +461,17 @@ mod tests {
     }
 
     #[test]
+    fn help_line_keeps_quit_and_tabs_at_80_columns() {
+        let mut app = app_with_results();
+        for tab in Tab::ORDER {
+            app.tab = tab;
+            let screen = draw_at(&mut app, 80, 16);
+            let help = screen.lines().last().unwrap();
+            assert!(help.contains("q quit · Tab"), "{tab:?}: {help}");
+        }
+    }
+
+    #[test]
     fn renders_transfers() {
         let mut app = app_with_results();
         app.tab = Tab::Transfers;

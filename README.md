@@ -22,7 +22,7 @@
 │▸ Tomorrow's Harvest  (17)               FLAC 24/44.1 ~1914k    643.5 MB  bob               │
 │▸ Music Has the Right to Children  (19)  MP3 320k               151.2 MB  carol             │
 └────────────────────────────────────────────────────────────────────────────────────────────┘
- 10j/10k jump · Enter open folder · d download · w wishlist · f/F filter · Tab/Alt-1…7 tabs
+ ? help · q quit · Tab/Alt-1…8 tabs · 10j/10k jump · Enter open folder · d download · w wishlist
 ```
 
 crabseek speaks the Soulseek protocol natively. There is no daemon, web UI or Python runtime:
