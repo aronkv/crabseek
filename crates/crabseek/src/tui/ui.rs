@@ -176,17 +176,7 @@ fn render_search(frame: &mut Frame, app: &mut App, area: Rect) {
         } else {
             Style::new().dark_gray()
         });
-    frame.render_widget(
-        Paragraph::new(app.input.as_str()).block(input_block),
-        input_area,
-    );
-    if editing {
-        let x = input_area.x + 1 + app.input.chars().count() as u16;
-        frame.set_cursor_position(Position::new(
-            x.min(input_area.right().saturating_sub(2)),
-            input_area.y + 1,
-        ));
-    }
+    render_input(frame, input_area, input_block, &app.input, editing);
 
     let title = match &app.search {
         None => format!(" Results{} ", filter_note(&mut app.results)),
@@ -570,17 +560,7 @@ fn render_browse(frame: &mut Frame, app: &mut App, area: Rect) {
         } else {
             Style::new().dark_gray()
         });
-    frame.render_widget(
-        Paragraph::new(app.browse_input.as_str()).block(input_block),
-        input_area,
-    );
-    if editing {
-        let x = input_area.x + 1 + app.browse_input.chars().count() as u16;
-        frame.set_cursor_position(Position::new(
-            x.min(input_area.right().saturating_sub(2)),
-            input_area.y + 1,
-        ));
-    }
+    render_input(frame, input_area, input_block, &app.browse_input, editing);
 
     let (title, empty) = match &app.browse {
         None => (
@@ -836,23 +816,14 @@ fn render_chat(frame: &mut Frame, app: &mut App, area: Rect) {
         Some(ChatInput::NewUser(t)) => (" Write to user ", t.as_str()),
         None => (" Enter or i to write ", ""),
     };
-    frame.render_widget(
-        Paragraph::new(text).block(Block::bordered().title(label).border_style(
-            if chats.input.is_some() {
-                Style::new().cyan()
-            } else {
-                Style::new().dark_gray()
-            },
-        )),
-        input_area,
-    );
-    if chats.input.is_some() {
-        let x = input_area.x + 1 + UnicodeWidthStr::width(text) as u16;
-        frame.set_cursor_position(Position::new(
-            x.min(input_area.right().saturating_sub(2)),
-            input_area.y + 1,
-        ));
-    }
+    let block = Block::bordered()
+        .title(label)
+        .border_style(if chats.input.is_some() {
+            Style::new().cyan()
+        } else {
+            Style::new().dark_gray()
+        });
+    render_input(frame, input_area, block, text, chats.input.is_some());
 }
 
 fn render_wishlist(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -860,19 +831,10 @@ fn render_wishlist(frame: &mut Frame, app: &mut App, area: Rect) {
         Some(input) => {
             let [input_area, list_area] =
                 Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).areas(area);
-            frame.render_widget(
-                Paragraph::new(input.as_str()).block(
-                    Block::bordered()
-                        .title(" Add to wishlist ")
-                        .border_style(Style::new().cyan()),
-                ),
-                input_area,
-            );
-            let x = input_area.x + 1 + input.chars().count() as u16;
-            frame.set_cursor_position(Position::new(
-                x.min(input_area.right().saturating_sub(2)),
-                input_area.y + 1,
-            ));
+            let block = Block::bordered()
+                .title(" Add to wishlist ")
+                .border_style(Style::new().cyan());
+            render_input(frame, input_area, block, input, true);
             list_area
         }
         None => area,
@@ -967,19 +929,10 @@ fn render_buddies(frame: &mut Frame, app: &mut App, area: Rect) {
         Some(input) => {
             let [input_area, list_area] =
                 Layout::vertical([Constraint::Length(3), Constraint::Min(1)]).areas(area);
-            frame.render_widget(
-                Paragraph::new(input.as_str()).block(
-                    Block::bordered()
-                        .title(" Add buddy ")
-                        .border_style(Style::new().cyan()),
-                ),
-                input_area,
-            );
-            let x = input_area.x + 1 + input.chars().count() as u16;
-            frame.set_cursor_position(Position::new(
-                x.min(input_area.right().saturating_sub(2)),
-                input_area.y + 1,
-            ));
+            let block = Block::bordered()
+                .title(" Add buddy ")
+                .border_style(Style::new().cyan());
+            render_input(frame, input_area, block, input, true);
             list_area
         }
         None => area,
@@ -1140,10 +1093,7 @@ fn render_settings(frame: &mut Frame, app: &mut App, area: Rect) {
         let marker = if selected { "› " } else { "  " };
         match editing.filter(|e| e.item == item) {
             Some(edit) => {
-                cursor = Some((
-                    lines.len(),
-                    marker.chars().count() + edit.text.chars().count(),
-                ));
+                cursor = Some((lines.len(), marker.width() + edit.text.width()));
                 lines.push(Line::from(vec![
                     Span::raw(marker),
                     Span::raw(edit.text.clone()).reversed(),
@@ -1326,6 +1276,19 @@ fn progress_bar(received: u64, size: u64, width: usize) -> Line<'static> {
         Span::raw("─".repeat(width - filled)).dark_gray(),
         Span::raw(format!(" {:>3.0}%", ratio * 100.0)),
     ])
+}
+
+/// A one-line bordered text box. With `cursor`, the cursor sits after the
+/// text; text too wide for the box scrolls so its end stays in view.
+fn render_input(frame: &mut Frame, area: Rect, block: Block, text: &str, cursor: bool) {
+    let inner = block.inner(area);
+    // One column stays free for the cursor.
+    let shown = ellipsis_start(text, usize::from(inner.width.saturating_sub(1)));
+    let x = inner.x + shown.width() as u16;
+    frame.render_widget(Paragraph::new(shown).block(block), area);
+    if cursor {
+        frame.set_cursor_position(Position::new(x, inner.y));
+    }
 }
 
 /// Cuts `s` to `width` display columns, ending in `…` when it had to cut.

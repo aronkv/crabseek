@@ -7,6 +7,7 @@ use ratatui::layout::{Constraint, Flex, Layout, Position, Rect};
 use ratatui::style::{Style, Stylize};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
+use unicode_width::UnicodeWidthStr;
 
 /// The server's limit for usernames.
 const MAX_USERNAME: usize = 30;
@@ -238,7 +239,7 @@ pub fn render(frame: &mut Frame, form: &LoginForm, config_path: &str) {
 
     if !form.busy {
         let (row, len) = match form.field {
-            Field::Username => (user_box, form.username.chars().count()),
+            Field::Username => (user_box, form.username.width()),
             Field::Password => (pass_box, form.password.chars().count()),
         };
         let x = (row.x + 1 + len as u16).min(row.right().saturating_sub(1));

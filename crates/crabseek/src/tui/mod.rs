@@ -404,6 +404,38 @@ mod tests {
         assert!(screen.contains("16/44.1 ~1200k 3:20"));
     }
 
+    /// The cursor's column after drawing the search box with `query`.
+    fn search_cursor(query: &str) -> (u16, String) {
+        let mut app = app_with_results();
+        app.focus = Focus::Input;
+        app.input = query.into();
+        let mut terminal = Terminal::new(TestBackend::new(40, 16)).unwrap();
+        terminal.draw(|f| ui::render(f, &mut app)).unwrap();
+        let x = terminal.get_cursor_position().unwrap().x;
+        let buf = terminal.backend().buffer();
+        // The search box's text row: its first line under the header.
+        let row = (0..buf.area.height)
+            .map(|y| {
+                (0..buf.area.width)
+                    .map(|x| buf[(x, y)].symbol())
+                    .collect::<String>()
+            })
+            .find(|l| l.starts_with('│'))
+            .unwrap();
+        (x, row)
+    }
+
+    #[test]
+    fn search_cursor_counts_display_width_and_scrolls() {
+        // Three wide characters take as many columns as six narrow ones.
+        assert_eq!(search_cursor("日本語").0, search_cursor("abcdef").0);
+        // A query wider than the box shows its end, cursor inside the box.
+        let long = format!("{}END", "x".repeat(60));
+        let (x, row) = search_cursor(&long);
+        assert!(x < 39, "cursor at {x}, past the border");
+        assert!(row.contains("END"), "{row}");
+    }
+
     #[test]
     fn renders_transfers() {
         let mut app = app_with_results();
