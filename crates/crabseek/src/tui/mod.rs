@@ -15,7 +15,7 @@ mod uploads;
 mod wishlist;
 
 use std::pin::Pin;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crabseek_net::{Client, Event};
 use crossterm::event::{
@@ -32,6 +32,11 @@ use login::{LoginAction, LoginForm};
 
 /// Redraw at least this often so timers and speeds stay current.
 const TICK: Duration = Duration::from_millis(500);
+
+/// Changed lists are saved at most this often. Each save syncs the file
+/// to disk on the UI task, which a slow disk would feel on every key; a
+/// crash loses at most this much. Quitting saves at once.
+const SAVE_EVERY: Duration = Duration::from_secs(5);
 
 /// Events handled per redraw at most, so a flood of search results cannot
 /// hold back drawing and keys. The rest wait for the next pass.
@@ -235,6 +240,7 @@ where
     B::Error: Send + Sync + 'static,
 {
     let mut tick = tokio::time::interval(TICK);
+    let mut last_save = Instant::now();
     let mut client_alive = true;
 
     while !app.quit {
@@ -260,7 +266,10 @@ where
             },
             _ = tick.tick() => {
                 app.tick();
-                app.persist();
+                if last_save.elapsed() >= SAVE_EVERY {
+                    app.persist();
+                    last_save = Instant::now();
+                }
             }
         }
     }
