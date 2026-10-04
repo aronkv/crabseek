@@ -18,7 +18,16 @@ use crate::config::{self, display_path};
 use crate::search::{human_size, quality};
 use unicode_width::UnicodeWidthStr;
 
-const SELECTED: Style = Style::new().add_modifier(Modifier::REVERSED);
+/// The cursor row: one even bar. Setting the foreground too keeps cells
+/// with their own colours (green, cyan, dark gray) readable on it.
+const SELECTED: Style = Style::new()
+    .fg(Color::White)
+    .bg(Color::DarkGray)
+    .add_modifier(Modifier::BOLD);
+
+/// The cursor row of a list whose input box has the focus: still visible,
+/// but quieter than [`SELECTED`].
+const SELECTED_DIM: Style = Style::new().fg(Color::Gray).bg(Color::DarkGray);
 
 pub fn render(frame: &mut Frame, app: &mut App) {
     let [header, body, status, help] = Layout::vertical([
@@ -294,7 +303,7 @@ fn render_result_list(
     let table = Table::new(rows, widths).row_highlight_style(if list.focused {
         SELECTED
     } else {
-        Style::new()
+        SELECTED_DIM
     });
     let mut state = TableState::new().with_selected(Some(selected - *offset));
     frame.render_stateful_widget(table, inner, &mut state);
@@ -916,7 +925,7 @@ fn render_wishlist(frame: &mut Frame, app: &mut App, area: Rect) {
         ],
     )
     .row_highlight_style(if w.adding.is_some() {
-        Style::new()
+        SELECTED_DIM
     } else {
         SELECTED
     });

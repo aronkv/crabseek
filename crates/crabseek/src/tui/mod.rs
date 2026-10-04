@@ -437,6 +437,30 @@ mod tests {
     }
 
     #[test]
+    fn cursor_row_stays_visible_while_typing() {
+        use ratatui::style::Color;
+        let mut app = app_with_results();
+        let mut terminal = Terminal::new(TestBackend::new(110, 16)).unwrap();
+        let mut cursor_bg = |app: &mut App| {
+            terminal.draw(|f| ui::render(f, app)).unwrap();
+            let buf = terminal.backend().buffer();
+            let y = (0..buf.area.height)
+                .find(|&y| {
+                    (0..buf.area.width)
+                        .map(|x| buf[(x, y)].symbol())
+                        .collect::<String>()
+                        .contains("▸ Boards")
+                })
+                .unwrap();
+            // The availability cell is green; the bar must cover it too.
+            (buf[(2, y)].bg, buf[(buf.area.width - 3, y)].bg)
+        };
+        assert_eq!(cursor_bg(&mut app), (Color::DarkGray, Color::DarkGray));
+        app.focus = Focus::Input;
+        assert_eq!(cursor_bg(&mut app), (Color::DarkGray, Color::DarkGray));
+    }
+
+    #[test]
     fn renders_transfers() {
         let mut app = app_with_results();
         app.tab = Tab::Transfers;
