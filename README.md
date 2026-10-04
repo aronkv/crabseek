@@ -16,11 +16,11 @@
 │boards of canada                                                                            │
 └────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌ "boards of canada": 659 users, 49925 files (10s) · [FLAC] 412 folders ─────────────────────┐
-│▾ Boards of Canada\Geogaddi  (24)     FLAC 16/44.1 ~903kbps   512.3 MB  alice free 13.3 MB/s│
-│    01 - Ready Lets Go.flac           44.1kHz/16bit ~1006kbps   4.4 MB                      │
-│    02 - Music Is Math.flac           44.1kHz/16bit ~836kbps   33.6 MB                      │
-│▸ Tomorrow's Harvest  (17)            FLAC 24/44.1 ~1914kbps  643.5 MB  bob   free 12.1 MB/s│
-│▸ Music Has the Right to Children (19) MP3 320kbps            151.2 MB  carol  queue 2      │
+│▾ Boards of Canada\Geogaddi  (24)        FLAC 16/44.1 ~903k     512.3 MB  alice             │
+│    01 - Ready Lets Go.flac              16/44.1 ~1006k 4:22    4.4 MB                      │
+│    02 - Music Is Math.flac              16/44.1 ~836k 5:41     33.6 MB                     │
+│▸ Tomorrow's Harvest  (17)               FLAC 24/44.1 ~1914k    643.5 MB  bob               │
+│▸ Music Has the Right to Children  (19)  MP3 320k               151.2 MB  carol             │
 └────────────────────────────────────────────────────────────────────────────────────────────┘
  10j/10k jump · Enter open folder · d download · w wishlist · f/F filter · Tab/Alt-1…7 tabs
 ```

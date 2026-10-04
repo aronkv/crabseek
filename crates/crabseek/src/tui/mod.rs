@@ -361,7 +361,11 @@ mod tests {
     }
 
     fn draw(app: &mut App) -> String {
-        let mut terminal = Terminal::new(TestBackend::new(110, 16)).unwrap();
+        draw_at(app, 110, 16)
+    }
+
+    fn draw_at(app: &mut App, width: u16, height: u16) -> String {
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
         terminal.draw(|f| ui::render(f, app)).unwrap();
         let buf = terminal.backend().buffer();
         (0..buf.area.height)
@@ -386,6 +390,18 @@ mod tests {
         assert!(screen.contains("02 - Track.flac"));
         assert!(screen.contains("FLAC 16/44.1"));
         assert!(screen.contains("alice"));
+    }
+
+    #[test]
+    fn search_results_stay_readable_at_80_columns() {
+        let mut app = app_with_results();
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        let screen = draw_at(&mut app, 80, 16);
+        println!("{screen}");
+        assert!(screen.contains("▾ Boards of Canada\\Geogaddi  (3)"));
+        assert!(screen.contains("01 - Track.flac"));
+        // The whole file quality, length included.
+        assert!(screen.contains("16/44.1 ~1200k 3:20"));
     }
 
     #[test]

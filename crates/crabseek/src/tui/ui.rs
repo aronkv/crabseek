@@ -285,25 +285,22 @@ fn render_result_list(
         .take(height)
         .copied()
         .collect();
+    let cols = ResultColumns::fit(inner.width, list.show_user);
     let rows: Vec<TableRow> = visible
         .into_iter()
-        .map(|row| result_row(results, row, list.show_user))
+        .map(|row| result_row(results, row, list.show_user, cols))
         .collect();
-    let widths = if list.show_user {
-        vec![
-            Constraint::Fill(1),
-            Constraint::Length(22),
-            Constraint::Length(9),
-            Constraint::Length(18),
-            Constraint::Length(20),
-        ]
-    } else {
-        vec![
-            Constraint::Fill(1),
-            Constraint::Length(22),
-            Constraint::Length(9),
-        ]
-    };
+    let mut widths = vec![
+        Constraint::Fill(1),
+        Constraint::Length(QUALITY_W),
+        Constraint::Length(SIZE_W),
+    ];
+    if cols.user {
+        widths.push(Constraint::Length(USER_W));
+    }
+    if cols.availability {
+        widths.push(Constraint::Length(AVAILABILITY_W));
+    }
     let table = Table::new(rows, widths).row_highlight_style(if list.focused {
         SELECTED
     } else {
@@ -313,7 +310,50 @@ fn render_result_list(
     frame.render_stateful_widget(table, inner, &mut state);
 }
 
-fn result_row(results: &Results, row: Row, show_user: bool) -> TableRow<'static> {
+const QUALITY_W: u16 = 22;
+const SIZE_W: u16 = 9;
+const USER_W: u16 = 18;
+const AVAILABILITY_W: u16 = 20;
+/// Narrower than this, the name loses to the optional columns.
+const NAME_MIN: u16 = 32;
+
+/// The result list's name width and which optional columns fit. On a
+/// narrow terminal availability goes first, then the user.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ResultColumns {
+    name: u16,
+    user: bool,
+    availability: bool,
+}
+
+impl ResultColumns {
+    fn fit(width: u16, show_user: bool) -> Self {
+        // Each column after the first is preceded by one space.
+        let base = QUALITY_W + 1 + SIZE_W + 1;
+        let user = base + USER_W + 1;
+        let all = user + AVAILABILITY_W + 1;
+        let (taken, user, availability) = if show_user && width >= all + NAME_MIN {
+            (all, true, true)
+        } else if show_user && width >= user + NAME_MIN {
+            (user, true, false)
+        } else {
+            (base, false, false)
+        };
+        Self {
+            name: width.saturating_sub(taken),
+            user,
+            availability,
+        }
+    }
+}
+
+fn result_row(
+    results: &Results,
+    row: Row,
+    show_user: bool,
+    cols: ResultColumns,
+) -> TableRow<'static> {
+    let name_width = usize::from(cols.name);
     match row {
         Row::Folder(id) => {
             let filter = results.filter();
@@ -325,30 +365,33 @@ fn result_row(results: &Results, row: Row, show_user: bool) -> TableRow<'static>
             };
             // Browsing one user's tree, more of the path is useful.
             let name = last_components(&f.path, if show_user { 2 } else { 4 });
-            let availability = if f.slot_free {
-                Span::raw(format!("free  {}/s", human_size(f.avg_speed.into()))).green()
-            } else {
-                Span::raw(format!("queue {}", f.queue_length)).yellow()
-            };
+            // The file count stays visible; the name gives way.
+            let count = format!("  ({})", f.visible_count(filter));
+            let room = name_width.saturating_sub(2 + count.width());
             let mut cells = vec![
-                Cell::from(format!(
-                    "{marker} {name}  ({})",
-                    f.visible_files(filter).len()
-                ))
-                .bold(),
+                Cell::from(format!("{marker} {}{count}", ellipsis(&name, room))).bold(),
                 Cell::from(f.quality(filter)),
                 Cell::from(human_size(f.total_size(filter))),
             ];
-            if show_user {
-                cells.push(Cell::from(f.username.clone()).cyan());
-                cells.push(Cell::from(availability));
+            if cols.user {
+                cells.push(Cell::from(ellipsis(&f.username, USER_W.into())).cyan());
+            }
+            if cols.availability {
+                cells.push(Cell::from(if f.slot_free {
+                    Span::raw(format!("free  {}/s", human_size(f.avg_speed.into()))).green()
+                } else {
+                    Span::raw(format!("queue {}", f.queue_length)).yellow()
+                }));
             }
             TableRow::new(cells)
         }
         Row::File(id, i) => {
             let file = &results.folder(id).files[i];
             TableRow::new(vec![
-                Cell::from(format!("    {}", file.basename())),
+                Cell::from(format!(
+                    "    {}",
+                    ellipsis(file.basename(), name_width.saturating_sub(4))
+                )),
                 Cell::from(quality(file)).dark_gray(),
                 Cell::from(human_size(file.size)),
             ])
@@ -423,7 +466,7 @@ fn render_transfers(frame: &mut Frame, app: &mut App, area: Rect) {
                     Cell::from(status),
                     Cell::from(bar),
                     Cell::from(speed),
-                    Cell::from(t.username.clone()).cyan(),
+                    Cell::from(ellipsis(&t.username, 18)).cyan(),
                     Cell::from(t.basename().to_owned()),
                 ])
             })
@@ -443,6 +486,8 @@ fn render_transfers(frame: &mut Frame, app: &mut App, area: Rect) {
         frame.render_stateful_widget(table, inner, &mut state);
     }
 
+    // Inside the detail block's borders.
+    let width = usize::from(detail_area.width.saturating_sub(2));
     let detail: Vec<Line> = match app.transfers.selected() {
         None => vec![],
         Some(t) => {
@@ -452,12 +497,15 @@ fn render_transfers(frame: &mut Frame, app: &mut App, area: Rect) {
                 DownloadState::Transferring { received, size } => {
                     format!("{} of {}", human_size(*received), human_size(*size))
                 }
-                DownloadState::Completed { path } => format!("saved to {}", path.display()),
+                DownloadState::Completed { path } => format!(
+                    "saved to {}",
+                    ellipsis_start(&path.display().to_string(), width.saturating_sub(9))
+                ),
                 DownloadState::Failed { reason } => format!("failed: {reason}"),
             };
             vec![
-                Line::from(t.filename.clone()).dark_gray(),
-                Line::from(state),
+                Line::from(ellipsis_start(&t.filename, width)).dark_gray(),
+                Line::from(ellipsis(&state, width)),
             ]
         }
     };
@@ -602,7 +650,7 @@ fn render_uploads(frame: &mut Frame, app: &mut App, area: Rect) {
                 ),
                 UploadState::Failed { reason } => (
                     Span::raw("failed").red(),
-                    Line::from(reason.clone()).dark_gray(),
+                    Line::from(ellipsis(reason, 26)).dark_gray(),
                     String::new(),
                 ),
             };
@@ -610,7 +658,7 @@ fn render_uploads(frame: &mut Frame, app: &mut App, area: Rect) {
                 Cell::from(status),
                 Cell::from(bar),
                 Cell::from(speed),
-                Cell::from(u.username.clone()).cyan(),
+                Cell::from(ellipsis(&u.username, 18)).cyan(),
                 Cell::from(u.basename().to_owned()),
             ])
         })
@@ -1241,6 +1289,50 @@ fn progress_bar(received: u64, size: u64, width: usize) -> Line<'static> {
     ])
 }
 
+/// Cuts `s` to `width` display columns, ending in `…` when it had to cut.
+fn ellipsis(s: &str, width: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+    if s.width() <= width {
+        return s.to_owned();
+    }
+    let mut out = String::new();
+    let mut used = 0;
+    for c in s.chars() {
+        let w = c.width().unwrap_or(0);
+        if used + w + 1 > width {
+            break;
+        }
+        out.push(c);
+        used += w;
+    }
+    if width > 0 {
+        out.push('…');
+    }
+    out
+}
+
+/// Like [`ellipsis`], but keeps the end: for paths, where the file name
+/// matters most.
+fn ellipsis_start(s: &str, width: usize) -> String {
+    use unicode_width::UnicodeWidthChar;
+    if s.width() <= width {
+        return s.to_owned();
+    }
+    let mut tail = Vec::new();
+    let mut used = 0;
+    for c in s.chars().rev() {
+        let w = c.width().unwrap_or(0);
+        if used + w + 1 > width {
+            break;
+        }
+        tail.push(c);
+        used += w;
+    }
+    let mut out = String::from(if width > 0 { "…" } else { "" });
+    out.extend(tail.into_iter().rev());
+    out
+}
+
 /// The last `n` path components, e.g. `Artist\Album`.
 fn last_components(path: &str, n: usize) -> String {
     let parts: Vec<&str> = path.split(['\\', '/']).collect();
@@ -1277,5 +1369,32 @@ mod tests {
             "Artist\\Album"
         );
         assert_eq!(last_components("Album", 2), "Album");
+    }
+
+    #[test]
+    fn ellipsis_cuts_by_display_width() {
+        assert_eq!(ellipsis("abc", 3), "abc");
+        assert_eq!(ellipsis("abcdef", 4), "abc…");
+        // A wide character that would straddle the edge is dropped.
+        assert_eq!(ellipsis("日本語", 4), "日…");
+        assert_eq!(ellipsis("abc", 0), "");
+        assert_eq!(ellipsis_start("a\\b\\track.flac", 8), "…ck.flac");
+        assert_eq!(ellipsis_start("日本語", 4), "…語");
+    }
+
+    #[test]
+    fn narrow_result_lists_drop_columns_before_the_name() {
+        let wide = ResultColumns::fit(108, true);
+        assert!(wide.user && wide.availability);
+        assert_eq!(wide.name, 108 - 73);
+        // 80 columns minus the borders.
+        let at_80 = ResultColumns::fit(78, true);
+        assert!(!at_80.user && !at_80.availability);
+        assert!(at_80.name >= NAME_MIN, "{at_80:?}");
+        let at_100 = ResultColumns::fit(98, true);
+        assert!(at_100.user && !at_100.availability);
+        assert!(at_100.name >= NAME_MIN, "{at_100:?}");
+        // A browse listing has no user columns to drop.
+        assert_eq!(ResultColumns::fit(78, false).name, 78 - 33);
     }
 }

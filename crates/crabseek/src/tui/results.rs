@@ -2,11 +2,11 @@
 //! the folder is expanded. The cursor follows its row when results get
 //! re-sorted as new ones arrive.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 use crabseek_proto::search::{SearchFile, SearchResponse};
 
-use crate::search::{format_kbps, is_lossy, kbps};
+use crate::search::{extension, format_kbps, has_ext, is_lossy, kbps};
 
 pub type FolderId = usize;
 
@@ -66,15 +66,14 @@ impl FormatFilter {
     /// Whether an audio file passes. Non-audio files (covers, lyrics)
     /// are never filtered out, so they come along with folder downloads.
     pub fn matches(self, f: &SearchFile) -> bool {
-        let ext = extension(f);
         match self {
             Self::All => true,
-            Self::Flac => ext == "flac",
+            Self::Flac => has_ext(f, &["flac"]),
             // ALAC hides in `.m4a`; `is_lossy` tells it from AAC.
-            Self::Lossless => LOSSLESS.contains(&ext.as_str()) || (ext == "m4a" && !is_lossy(f)),
-            Self::Mp3_320 => ext == "mp3" && f.bitrate().is_some_and(|b| b >= 320),
-            Self::Mp3 => ext == "mp3",
-            Self::M4a => matches!(ext.as_str(), "m4a" | "aac"),
+            Self::Lossless => has_ext(f, LOSSLESS) || (has_ext(f, &["m4a"]) && !is_lossy(f)),
+            Self::Mp3_320 => has_ext(f, &["mp3"]) && f.bitrate().is_some_and(|b| b >= 320),
+            Self::Mp3 => has_ext(f, &["mp3"]),
+            Self::M4a => has_ext(f, &["m4a", "aac"]),
         }
     }
 }
@@ -88,7 +87,7 @@ impl Folder {
             .collect()
     }
 
-    fn visible_count(&self, filter: FormatFilter) -> usize {
+    pub fn visible_count(&self, filter: FormatFilter) -> usize {
         self.files.iter().filter(|f| shows(filter, f)).count()
     }
 
@@ -98,22 +97,28 @@ impl Folder {
     }
 
     pub fn total_size(&self, filter: FormatFilter) -> u64 {
-        self.visible_files(filter)
-            .into_iter()
-            .map(|i| self.files[i].size)
+        self.files
+            .iter()
+            .filter(|f| shows(filter, f))
+            .map(|f| f.size)
             .sum()
     }
 
     /// Short quality summary of the dominant audio format among the files
     /// passing `filter`, e.g. `FLAC 16/44.1` or `MP3 320`.
     pub fn quality(&self, filter: FormatFilter) -> String {
-        let mut by_ext: HashMap<String, Vec<&SearchFile>> = HashMap::new();
+        // Few extensions per folder, so a list beats a map.
+        let mut by_ext: Vec<(&str, Vec<&SearchFile>)> = Vec::new();
         for f in self
             .files
             .iter()
             .filter(|f| is_audio(f) && filter.matches(f))
         {
-            by_ext.entry(extension(f)).or_default().push(f);
+            let ext = extension(f);
+            match by_ext.iter_mut().find(|(e, _)| e.eq_ignore_ascii_case(ext)) {
+                Some((_, files)) => files.push(f),
+                None => by_ext.push((ext, vec![f])),
+            }
         }
         let Some((ext, files)) = by_ext.into_iter().max_by_key(|(_, v)| v.len()) else {
             return String::new();
@@ -153,15 +158,8 @@ const AUDIO: &[&str] = &[
 
 const LOSSLESS: &[&str] = &["flac", "wav", "aiff", "aif", "alac", "ape", "wv"];
 
-fn extension(f: &SearchFile) -> String {
-    f.basename()
-        .rsplit_once('.')
-        .map(|(_, e)| e.to_lowercase())
-        .unwrap_or_default()
-}
-
 pub fn is_audio(f: &SearchFile) -> bool {
-    AUDIO.contains(&extension(f).as_str())
+    has_ext(f, AUDIO)
 }
 
 /// Whether `f` is listed under `filter`: matching audio, and every
@@ -557,7 +555,7 @@ mod tests {
             ],
         ));
         assert_eq!(r.folder(0).quality(FormatFilter::All), "FLAC 16/44.1");
-        assert_eq!(r.folder(1).quality(FormatFilter::All), "MP3 256kbps");
+        assert_eq!(r.folder(1).quality(FormatFilter::All), "MP3 256k");
     }
 
     #[test]
@@ -583,7 +581,7 @@ mod tests {
         let files: Vec<String> = r.selection_files().into_iter().map(|(_, f)| f).collect();
         assert_eq!(files, ["both\\1.mp3", "both\\cover.jpg"]);
         // Folders are created in path order: aac, both, v0.
-        assert_eq!(r.folder(1).quality(FormatFilter::Mp3_320), "MP3 320kbps");
+        assert_eq!(r.folder(1).quality(FormatFilter::Mp3_320), "MP3 320k");
 
         r.set_filter(FormatFilter::M4a);
         assert_eq!(r.visible_folders(), 1);

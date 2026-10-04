@@ -115,11 +115,15 @@ const LOSSY: &[&str] = &["mp3", "m4a", "aac", "ogg", "opus", "wma"];
 /// Above this an `.m4a` is ALAC rather than AAC.
 const LOSSLESS_KBPS: u32 = 600;
 
-fn extension(f: &SearchFile) -> String {
-    f.basename()
-        .rsplit_once('.')
-        .map(|(_, e)| e.to_lowercase())
-        .unwrap_or_default()
+/// The extension as sent, without the dot. Compare it ignoring case.
+pub(crate) fn extension(f: &SearchFile) -> &str {
+    f.basename().rsplit_once('.').map_or("", |(_, e)| e)
+}
+
+/// Whether the extension is one of `list` (lowercase), ignoring case.
+pub(crate) fn has_ext(f: &SearchFile, list: &[&str]) -> bool {
+    let ext = extension(f);
+    list.iter().any(|e| ext.eq_ignore_ascii_case(e))
 }
 
 /// Bitrate in kbps and whether it is estimated: the reported one, or else
@@ -137,26 +141,28 @@ pub(crate) fn kbps(f: &SearchFile) -> Option<(u32, bool)> {
 /// Lossy formats are described by bitrate, lossless ones by sample rate
 /// and bit depth.
 pub(crate) fn is_lossy(f: &SearchFile) -> bool {
-    let ext = extension(f);
-    if !LOSSY.contains(&ext.as_str()) {
+    if !has_ext(f, LOSSY) {
         return false;
     }
-    ext != "m4a" || kbps(f).is_none_or(|(k, _)| k < LOSSLESS_KBPS)
+    !has_ext(f, &["m4a"]) || kbps(f).is_none_or(|(k, _)| k < LOSSLESS_KBPS)
 }
 
+/// `320k`, or `~256k` when estimated.
 pub(crate) fn format_kbps((kbps, estimated): (u32, bool)) -> String {
     if estimated {
-        format!("~{kbps}kbps")
+        format!("~{kbps}k")
     } else {
-        format!("{kbps}kbps")
+        format!("{kbps}k")
     }
 }
 
+/// Compact enough for the results column: `16/44.1 ~1411k 4:05`
+/// (bit depth / kHz, kbps, length) or `320k 3:20`.
 pub(crate) fn quality(f: &SearchFile) -> String {
     let mut parts = Vec::new();
     let sample = match (f.sample_rate(), f.bit_depth()) {
-        (Some(rate), Some(depth)) => Some(format!("{:.1}kHz/{depth}bit", rate as f64 / 1000.0)),
-        (Some(rate), None) => Some(format!("{:.1}kHz", rate as f64 / 1000.0)),
+        (Some(rate), Some(depth)) => Some(format!("{depth}/{}", rate as f64 / 1000.0)),
+        (Some(rate), None) => Some(format!("{}kHz", rate as f64 / 1000.0)),
         _ => None,
     };
     if !is_lossy(f) {
@@ -166,7 +172,7 @@ pub(crate) fn quality(f: &SearchFile) -> String {
     if let Some(secs) = f.duration() {
         parts.push(format!("{}:{:02}", secs / 60, secs % 60));
     }
-    parts.join("  ")
+    parts.join(" ")
 }
 
 pub(crate) fn human_size(bytes: u64) -> String {
@@ -196,17 +202,38 @@ mod tests {
     }
 
     #[test]
+    fn extensions_ignore_case() {
+        let mp3 = SearchFile {
+            filename: "a\\B.MP3".into(),
+            ..Default::default()
+        };
+        assert_eq!(extension(&mp3), "MP3");
+        assert!(has_ext(&mp3, &["flac", "mp3"]));
+        assert!(is_lossy(&mp3));
+        let flac = SearchFile {
+            filename: "a.b\\track.Flac".into(),
+            ..Default::default()
+        };
+        assert!(!is_lossy(&flac));
+        let none = SearchFile {
+            filename: "a.b\\README".into(),
+            ..Default::default()
+        };
+        assert_eq!(extension(&none), "");
+    }
+
+    #[test]
     fn quality_strings() {
         let flac = SearchFile {
             attributes: vec![(1, 245), (4, 44100), (5, 16)],
             ..Default::default()
         };
-        assert_eq!(quality(&flac), "44.1kHz/16bit  4:05");
+        assert_eq!(quality(&flac), "16/44.1 4:05");
         let mp3 = SearchFile {
             attributes: vec![(0, 320), (1, 200), (2, 0)],
             ..Default::default()
         };
-        assert_eq!(quality(&mp3), "320kbps  3:20");
+        assert_eq!(quality(&mp3), "320k 3:20");
         // AAC without a reported bitrate: estimated from size and length.
         let aac = SearchFile {
             filename: "a\\x.m4a".into(),
@@ -214,12 +241,19 @@ mod tests {
             attributes: vec![(1, 200), (4, 44100), (5, 16)],
             ..Default::default()
         };
-        assert_eq!(quality(&aac), "~256kbps  3:20");
+        assert_eq!(quality(&aac), "~256k 3:20");
         // ALAC in an .m4a stays lossless.
         let alac = SearchFile {
             size: 40_000_000,
             ..aac.clone()
         };
-        assert_eq!(quality(&alac), "44.1kHz/16bit  ~1600kbps  3:20");
+        assert_eq!(quality(&alac), "16/44.1 ~1600k 3:20");
+        // The worst realistic case still fits the 22-wide column.
+        let hires = SearchFile {
+            size: 999_000_000,
+            attributes: vec![(1, 5999), (4, 192_000), (5, 24)],
+            ..Default::default()
+        };
+        assert_eq!(quality(&hires), "24/192 ~1332k 99:59");
     }
 }
