@@ -211,6 +211,7 @@ Without this, you can still download from peers that are reachable themselves.
 | chat | `Enter`, `i` | write to the selected conversation (`Enter` sends, `Esc` stops) |
 | | `a` | start a conversation with a username |
 | | `b` / `x` | browse the user / delete the conversation |
+| | `PgUp` / `PgDn` | scroll through older messages, also while writing |
 | wishlist | `a` | type a query to add (`Enter` adds it); `w` on search results does the same |
 | | `Enter` | open everything found for the wish on the Search tab |
 | | `r` | run the wish now (the next scheduled one waits a full interval) |

@@ -39,6 +39,11 @@ pub struct Chats {
     pub input: Option<ChatInput>,
     /// Something worth saving changed.
     pub dirty: bool,
+    /// Lines scrolled up from the newest message of the open conversation.
+    /// The renderer clamps it to what the conversation has.
+    pub scroll: usize,
+    /// Height of the message view at the last draw: one PageUp's worth.
+    pub page: usize,
 }
 
 impl Chats {
@@ -59,11 +64,27 @@ impl Chats {
 
     pub fn move_by(&mut self, delta: isize) {
         if !self.list.is_empty() {
-            self.selected = self
-                .selected
-                .saturating_add_signed(delta)
-                .min(self.list.len() - 1);
+            self.select(
+                self.selected
+                    .saturating_add_signed(delta)
+                    .min(self.list.len() - 1),
+            );
         }
+    }
+
+    /// Shows conversation `index`, from its newest message if it is
+    /// another one.
+    fn select(&mut self, index: usize) {
+        if index != self.selected {
+            self.scroll = 0;
+        }
+        self.selected = index;
+    }
+
+    /// Scrolls the open conversation by `pages` (positive is older).
+    pub fn scroll_pages(&mut self, pages: isize) {
+        let step = self.page.saturating_sub(1).max(1) as isize;
+        self.scroll = self.scroll.saturating_add_signed(pages * step);
     }
 
     /// Moves `username`'s conversation (created if needed) to the top and
@@ -125,16 +146,19 @@ impl Chats {
                 text,
             },
         );
+        // Back to the newest message, where the one just sent is.
+        self.scroll = 0;
         self.selected = 0;
     }
 
     /// Selects `username`'s conversation, creating an empty one if needed.
     pub fn open(&mut self, username: &str) {
         match self.list.iter().position(|c| c.username == username) {
-            Some(i) => self.selected = i,
+            Some(i) => self.select(i),
             None => {
                 self.bring_to_top(username);
                 self.selected = 0;
+                self.scroll = 0;
             }
         }
         self.mark_selected_read();
@@ -155,6 +179,7 @@ impl Chats {
         }
         let conv = self.list.remove(self.selected);
         self.selected = self.selected.min(self.list.len().saturating_sub(1));
+        self.scroll = 0;
         self.dirty = true;
         Some(conv.username)
     }

@@ -706,6 +706,50 @@ fn render_uploads(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_stateful_widget(table, inner, &mut state);
 }
 
+/// The lines of `conv` that fit a `width` × `height` view, `scroll` lines
+/// up from the newest, and that scroll clamped to the conversation.
+/// Messages are walked from the newest back, only as far as the view needs.
+fn conversation_lines(
+    conv: &super::chat::Conversation,
+    me: &str,
+    width: usize,
+    height: usize,
+    scroll: usize,
+) -> (Vec<Line<'static>>, usize) {
+    let want = height.saturating_add(scroll);
+    // Newest line first.
+    let mut lines: Vec<Line> = Vec::new();
+    for m in conv.messages.iter().rev() {
+        let (who, style) = if m.from_me {
+            (me, Style::new().dark_gray())
+        } else {
+            (conv.username.as_str(), Style::new().cyan())
+        };
+        let prefix = format!("{} {who}: ", super::chat::format_time(m.timestamp));
+        // Continuation lines are indented under the text, at most half
+        // the width; a wider prefix gets a line of its own.
+        let indent = prefix.width().min(width / 2);
+        let mut message: Vec<Line> = Vec::new();
+        let mut parts = wrap(&m.text, width.saturating_sub(indent)).into_iter();
+        if prefix.width() > indent {
+            message.push(Line::styled(ellipsis(&prefix, width), style));
+        } else if let Some(first) = parts.next() {
+            message.push(Line::from(vec![
+                Span::styled(prefix, style),
+                Span::raw(first),
+            ]));
+        }
+        message.extend(parts.map(|part| Line::from(format!("{}{part}", " ".repeat(indent)))));
+        lines.extend(message.into_iter().rev());
+        if lines.len() >= want {
+            break;
+        }
+    }
+    let scroll = scroll.min(lines.len().saturating_sub(height));
+    let shown = lines.into_iter().skip(scroll).take(height).rev().collect();
+    (shown, scroll)
+}
+
 /// Hard-wraps `text` to `width` columns (wide characters count double).
 fn wrap(text: &str, width: usize) -> Vec<String> {
     use unicode_width::UnicodeWidthChar;
@@ -731,6 +775,22 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
 fn render_chat(frame: &mut Frame, app: &mut App, area: Rect) {
     let [list_area, conv_area] =
         Layout::horizontal([Constraint::Length(26), Constraint::Min(20)]).areas(area);
+    let [messages_area, input_area] =
+        Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).areas(conv_area);
+    let inner = Block::bordered().inner(messages_area);
+    app.chats.page = inner.height.into();
+    // Clamped here, where the conversation's length in lines is known.
+    let (lines, scroll) = match app.chats.selected() {
+        Some(conv) => conversation_lines(
+            conv,
+            &app.username,
+            inner.width.into(),
+            inner.height.into(),
+            app.chats.scroll,
+        ),
+        None => (Vec::new(), 0),
+    };
+    app.chats.scroll = scroll;
     let chats = &app.chats;
 
     // Conversations.
@@ -763,16 +823,14 @@ fn render_chat(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_stateful_widget(table, list_inner, &mut state);
 
     // The selected conversation and the input box.
-    let [messages_area, input_area] =
-        Layout::vertical([Constraint::Min(3), Constraint::Length(3)]).areas(conv_area);
     let title = match chats.selected() {
+        Some(c) if scroll > 0 => format!(" {} · {scroll} lines up, PgDn for newer ", c.username),
         Some(c) => format!(" {} ", c.username),
         None => " Private messages ".to_owned(),
     };
     let block = Block::bordered()
         .title(title)
         .border_style(Style::new().dark_gray());
-    let inner = block.inner(messages_area);
     frame.render_widget(block, messages_area);
 
     match chats.selected() {
@@ -789,35 +847,7 @@ fn render_chat(frame: &mut Frame, app: &mut App, area: Rect) {
                 inner,
             );
         }
-        Some(conv) => {
-            let mut lines: Vec<Line> = Vec::new();
-            for m in &conv.messages {
-                let who = if m.from_me {
-                    app.username.as_str()
-                } else {
-                    conv.username.as_str()
-                };
-                let prefix = format!("{} {who}: ", super::chat::format_time(m.timestamp));
-                let indent = " ".repeat(prefix.chars().count().min(inner.width as usize / 2));
-                let body_width = (inner.width as usize).saturating_sub(indent.len());
-                for (i, part) in wrap(&m.text, body_width).into_iter().enumerate() {
-                    let lead = if i == 0 {
-                        let style = if m.from_me {
-                            Style::new().dark_gray()
-                        } else {
-                            Style::new().cyan()
-                        };
-                        Span::styled(prefix.clone(), style)
-                    } else {
-                        Span::raw(indent.clone())
-                    };
-                    lines.push(Line::from(vec![lead, Span::raw(part)]));
-                }
-            }
-            // Newest at the bottom.
-            let skip = lines.len().saturating_sub(inner.height as usize);
-            frame.render_widget(Paragraph::new(lines.split_off(skip)), inner);
-        }
+        Some(_) => frame.render_widget(Paragraph::new(lines), inner),
     }
 
     let (label, text) = match &chats.input {
@@ -1075,7 +1105,7 @@ fn help_line(app: &App) -> &'static str {
             " Enter send · Esc stop typing · Ctrl-u clear · Ctrl-c quit"
         }
         (Tab::Chat, _) => {
-            " j/k conversation · Enter/i write · a new conversation · b browse · x delete · m on other tabs · Tab/Alt-1…8 tabs · q quit"
+            " j/k conversation · PgUp/PgDn scroll · Enter/i write · a new conversation · b browse · x delete · m on other tabs · Tab/Alt-1…8 tabs · q quit"
         }
         (Tab::Wishlist, _) if app.wishlist.adding.is_some() => {
             " Enter add to wishlist · Esc cancel · Ctrl-u clear · Ctrl-c quit"
@@ -1380,6 +1410,30 @@ mod tests {
             "Artist\\Album"
         );
         assert_eq!(last_components("Album", 2), "Album");
+    }
+
+    #[test]
+    fn chat_lines_never_overflow_a_narrow_view() {
+        let conv = super::super::chat::Conversation {
+            username: "a_rather_long_soulseek_username".into(),
+            messages: vec![super::super::chat::ChatMessage {
+                timestamp: 0,
+                from_me: false,
+                text: "szia! megvan még a Geogaddi FLAC-ben? 日本語".into(),
+            }],
+            unread: 0,
+        };
+        let (lines, _) = conversation_lines(&conv, "me", 24, 10, 0);
+        for line in &lines {
+            assert!(line.width() <= 24, "{line:?} is {} wide", line.width());
+        }
+        // The prefix took a line of its own; the text follows in full.
+        let text: String = lines[1..]
+            .iter()
+            .map(|l| l.to_string().trim().to_owned())
+            .collect();
+        assert!(text.starts_with("szia!"), "{text}");
+        assert!(text.ends_with("日本語"), "{text}");
     }
 
     #[test]

@@ -934,6 +934,44 @@ mod tests {
     }
 
     #[test]
+    fn chat_scrolls_back_to_the_oldest_message() {
+        let mut app = app_with_results();
+        for i in 0..100 {
+            app.on_event(Event::PrivateMessage {
+                timestamp: chat::now(),
+                username: "carol".into(),
+                message: format!("message {i}"),
+                new: true,
+            });
+        }
+        app.on_key(KeyEvent::from(KeyCode::F(5)));
+        assert_eq!(app.tab, Tab::Chat);
+        // It would repeat the newest message.
+        app.status.clear();
+        let screen = draw(&mut app);
+        assert!(screen.contains("carol: message 99"));
+        assert!(!screen.contains("carol: message 0 "));
+        // Far more pages than needed: the scroll stops at the oldest.
+        for _ in 0..50 {
+            app.on_key(KeyEvent::from(KeyCode::PageUp));
+            draw(&mut app);
+        }
+        let screen = draw(&mut app);
+        println!("{screen}");
+        assert!(screen.contains("carol: message 0"));
+        assert!(!screen.contains("carol: message 99"));
+        assert!(screen.contains("lines up"));
+        // Writing works from the scrolled view, and PageDown goes back.
+        app.on_key(KeyEvent::from(KeyCode::Char('i')));
+        for _ in 0..50 {
+            app.on_key(KeyEvent::from(KeyCode::PageDown));
+        }
+        let screen = draw(&mut app);
+        assert!(screen.contains("carol: message 99"));
+        assert!(!screen.contains("lines up"));
+    }
+
+    #[test]
     fn download_key_on_offline_client_reports_error() {
         let mut app = app_with_results();
         app.on_key(KeyEvent::from(KeyCode::Char('d')));

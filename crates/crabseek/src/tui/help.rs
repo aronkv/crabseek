@@ -144,6 +144,10 @@ fn page(tab: Tab) -> Page {
                 ("m (on other tabs)", "write to the user of the selected row"),
                 ("b", "browse the user's shares"),
                 ("x", "delete the conversation"),
+                (
+                    "PgUp / PgDn",
+                    "scroll through older messages, also while writing",
+                ),
             ],
         },
         Tab::Wishlist => Page {

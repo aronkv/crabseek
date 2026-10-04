@@ -710,6 +710,8 @@ impl App {
             KeyCode::Up | KeyCode::Char('k') => c.move_by(-n),
             KeyCode::Home | KeyCode::Char('g') => c.selected = 0,
             KeyCode::End | KeyCode::Char('G') => c.move_by(isize::MAX),
+            KeyCode::PageUp => c.scroll_pages(n),
+            KeyCode::PageDown => c.scroll_pages(-n),
             KeyCode::Enter | KeyCode::Char('i') if c.selected().is_some() => {
                 c.input = Some(ChatInput::Message(String::new()))
             }
@@ -738,6 +740,8 @@ impl App {
         };
         match key.code {
             KeyCode::Esc => self.chats.input = None,
+            KeyCode::PageUp => self.chats.scroll_pages(1),
+            KeyCode::PageDown => self.chats.scroll_pages(-1),
             KeyCode::Backspace => {
                 text.pop();
             }
