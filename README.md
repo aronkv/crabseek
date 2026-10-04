@@ -4,7 +4,7 @@
 
 **A fast, keyboard-driven [Soulseek](https://www.slsknet.org/) client for the terminal, written in Rust.**
 
-[![CI](https://github.com/DarkAaronfox/crabseek/actions/workflows/ci.yml/badge.svg)](https://github.com/DarkAaronfox/crabseek/actions/workflows/ci.yml)
+[![CI](https://github.com/aronkv/crabseek/actions/workflows/ci.yml/badge.svg)](https://github.com/aronkv/crabseek/actions/workflows/ci.yml)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg)
 
@@ -79,28 +79,28 @@ you type `crabseek`, search, and download whole albums in a few keystrokes.
 ### Quick install (x86_64 Linux)
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/DarkAaronfox/crabseek/main/scripts/get.sh | sh
+curl -fsSL https://raw.githubusercontent.com/aronkv/crabseek/main/scripts/get.sh | sh
 ```
 
 This downloads the latest prebuilt release, checks its SHA-256 sum and installs it to
 `~/.local/bin` (glibc 2.35+, which covers current Arch, Fedora, Debian 12 and Ubuntu
 22.04 and newer). Read the script first if you like:
 [`scripts/get.sh`](scripts/get.sh). To remove crabseek again:
-`curl -fsSL https://raw.githubusercontent.com/DarkAaronfox/crabseek/main/scripts/get.sh | sh -s -- --uninstall`.
+`curl -fsSL https://raw.githubusercontent.com/aronkv/crabseek/main/scripts/get.sh | sh -s -- --uninstall`.
 
 ### From source
 
 You need a Rust toolchain (1.88 or newer). On Arch/CachyOS: `sudo pacman -S rustup && rustup default stable`.
 
 ```sh
-git clone https://github.com/DarkAaronfox/crabseek.git
+git clone https://github.com/aronkv/crabseek.git
 cd crabseek
 scripts/install.sh          # builds and installs to ~/.local/bin/crabseek
 ```
 
 Then run `crabseek`. If your shell cannot find it, add `~/.local/bin` to your `PATH`; the
 script prints how. To install somewhere else, use `PREFIX=/usr/local sudo -E scripts/install.sh`.
-Alternatively: `cargo install --git https://github.com/DarkAaronfox/crabseek crabseek`.
+Alternatively: `cargo install --git https://github.com/aronkv/crabseek crabseek`.
 
 ### Uninstall
 

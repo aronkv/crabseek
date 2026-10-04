@@ -1,4 +1,4 @@
-# Maintainer: DarkAaronfox <120031218+DarkAaronfox@users.noreply.github.com>
+# Maintainer: aronkv <120031218+aronkv@users.noreply.github.com>
 #
 # To release: tag vX.Y.Z on GitHub, set pkgver, `updpkgsums`,
 # `makepkg --printsrcinfo > .SRCINFO`, push both to the AUR repo.
@@ -7,7 +7,7 @@ pkgver=0.1.0
 pkgrel=1
 pkgdesc="A fast Soulseek client for the terminal"
 arch=('x86_64' 'aarch64')
-url="https://github.com/DarkAaronfox/crabseek"
+url="https://github.com/aronkv/crabseek"
 license=('MIT')
 depends=('libgcc' 'glibc')
 makedepends=('cargo')

@@ -2,7 +2,7 @@
 # Enable with: systemctl --user enable --now crabseek
 [Unit]
 Description=crabseek Soulseek client (background)
-Documentation=https://github.com/DarkAaronfox/crabseek
+Documentation=https://github.com/aronkv/crabseek
 
 [Service]
 ExecStart=@BIN@ daemon

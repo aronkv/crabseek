@@ -2,13 +2,13 @@
 # Installs the latest crabseek release (prebuilt, x86_64 Linux) into
 # ~/.local/bin, after checking its SHA-256 sum.
 #
-#   curl -fsSL https://raw.githubusercontent.com/DarkAaronfox/crabseek/main/scripts/get.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/aronkv/crabseek/main/scripts/get.sh | sh
 #
 # Options (after `sh -s --`): --version 0.1.0, --uninstall.
 # Environment: PREFIX (default ~/.local).
 set -eu
 
-REPO="DarkAaronfox/crabseek"
+REPO="aronkv/crabseek"
 PREFIX="${PREFIX:-$HOME/.local}"
 BIN="$PREFIX/bin/crabseek"
 VERSION=""

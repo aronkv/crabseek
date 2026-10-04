@@ -2,14 +2,14 @@ pkgbase = crabseek
 	pkgdesc = A fast Soulseek client for the terminal
 	pkgver = 0.1.0
 	pkgrel = 1
-	url = https://github.com/DarkAaronfox/crabseek
+	url = https://github.com/aronkv/crabseek
 	arch = x86_64
 	arch = aarch64
 	license = MIT
 	makedepends = cargo
 	depends = libgcc
 	depends = glibc
-	source = crabseek-0.1.0.tar.gz::https://github.com/DarkAaronfox/crabseek/archive/refs/tags/v0.1.0.tar.gz
+	source = crabseek-0.1.0.tar.gz::https://github.com/aronkv/crabseek/archive/refs/tags/v0.1.0.tar.gz
 	sha256sums = 0258dd581d86f7f8965e1111057d554aa2a6ccc06a24c2ccdaed8d57bb8224b3
 
 pkgname = crabseek
