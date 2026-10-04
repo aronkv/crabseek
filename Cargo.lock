@@ -530,7 +530,7 @@ dependencies = [
 
 [[package]]
 name = "crabseek"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -554,7 +554,7 @@ dependencies = [
 
 [[package]]
 name = "crabseek-net"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "crabseek-proto",
@@ -572,7 +572,7 @@ dependencies = [
 
 [[package]]
 name = "crabseek-proto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "bytes",
  "flate2",
