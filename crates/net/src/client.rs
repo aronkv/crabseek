@@ -19,7 +19,7 @@ use crabseek_proto::ConnectionType;
 use crabseek_proto::distrib::DistribMsg;
 use crabseek_proto::peer::{PeerMsg, UserInfo};
 use crabseek_proto::peer_init::PeerInitMsg;
-use crabseek_proto::search::SearchResponse;
+use crabseek_proto::search::{SearchFile, SearchResponse};
 use crabseek_proto::server::{ServerRequest, ServerResponse};
 use crabseek_proto::shares::SharedFileList;
 use tokio::net::{TcpListener, TcpStream};
@@ -48,6 +48,11 @@ const PENDING_TIMEOUT: Duration = Duration::from_secs(30);
 /// run into the open-file limit (often 1024 under systemd). The rest are
 /// declined right away.
 const MAX_PIERCES: usize = 128;
+
+/// Share searches running on the blocking pool at once. Distributed
+/// searches can arrive in bursts; the ones over the cap are dropped, which
+/// only means we do not answer them.
+const MAX_SEARCHES_IN_FLIGHT: usize = 16;
 
 /// The spec allows at most one `ServerPing` a minute.
 const PING_INTERVAL: Duration = Duration::from_secs(60);
@@ -249,6 +254,7 @@ impl Client {
                 distrib: Distrib::default(),
                 portmap_task: None,
                 pierces: 0,
+                searches_in_flight: 0,
             }
             .run(rx),
         );
@@ -489,6 +495,16 @@ pub(crate) enum Internal {
         index: ShareIndex,
         errors: Vec<String>,
     },
+    SearchDone {
+        username: String,
+        token: u32,
+        query: String,
+        files: Vec<SearchFile>,
+    },
+    BrowseReply {
+        username: String,
+        msg: PeerMsg,
+    },
     CancelUpload {
         id: UploadId,
     },
@@ -624,6 +640,8 @@ struct Actor {
     portmap_task: Option<tokio::task::AbortHandle>,
     /// Indirect connection attempts in flight (see [`MAX_PIERCES`]).
     pierces: usize,
+    /// Share searches in flight (see [`MAX_SEARCHES_IN_FLIGHT`]).
+    searches_in_flight: usize,
 }
 
 impl Actor {
@@ -663,6 +681,13 @@ impl Actor {
                 Internal::SharesScanned { index, errors } => {
                     self.on_shares_scanned(index, errors).await
                 }
+                Internal::SearchDone {
+                    username,
+                    token,
+                    query,
+                    files,
+                } => self.on_search_done(username, token, query, files).await,
+                Internal::BrowseReply { username, msg } => self.on_browse_reply(&username, msg),
                 Internal::CancelUpload { id } => self.cancel_upload(id).await,
                 Internal::ClearFinishedUploads => self.clear_finished_uploads(),
                 Internal::UploadTimeout { id, token } => self.on_upload_timeout(id, token).await,
@@ -975,7 +1000,7 @@ impl Actor {
                 username,
                 token,
                 query,
-            } => self.on_search_request(username, token, query).await,
+            } => self.on_search_request(username, token, query),
             ServerResponse::PossibleParents(parents) => self.on_possible_parents(parents).await,
             ServerResponse::EmbeddedMessage { code, payload } => {
                 self.on_embedded_message(code, payload).await

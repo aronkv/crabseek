@@ -139,6 +139,11 @@ impl Wishlist {
         self.next_due.saturating_duration_since(now)
     }
 
+    /// Whether `token` belongs to one of our wishlist searches.
+    pub fn wants(&self, token: u32) -> bool {
+        self.items.iter().any(|i| i.tokens.contains(&token))
+    }
+
     /// Files a wishlist search found; returns the query and how many of
     /// the files are new, or `None` if the token is not ours.
     pub fn on_result(&mut self, resp: SearchResponse) -> Option<(String, usize)> {

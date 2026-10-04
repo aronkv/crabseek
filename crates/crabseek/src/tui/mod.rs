@@ -33,6 +33,10 @@ use login::{LoginAction, LoginForm};
 /// Redraw at least this often so timers and speeds stay current.
 const TICK: Duration = Duration::from_millis(500);
 
+/// Events handled per redraw at most, so a flood of search results cannot
+/// hold back drawing and keys. The rest wait for the next pass.
+const MAX_EVENTS_PER_DRAW: usize = 500;
+
 /// What drives the UI: terminal events, or (in background mode) requests
 /// from the attach protocol.
 pub enum Input {
@@ -250,10 +254,7 @@ where
             event = events.recv(), if client_alive => match event {
                 Some(event) => {
                     app.on_event(event);
-                    // Search results arrive in bursts; draw once per burst.
-                    while let Ok(event) = events.try_recv() {
-                        app.on_event(event);
-                    }
+                    drain_burst(&mut app, &mut events);
                 }
                 None => client_alive = false,
             },
@@ -265,6 +266,18 @@ where
     }
     app.persist();
     Ok(())
+}
+
+/// Search results arrive in bursts; handles up to [`MAX_EVENTS_PER_DRAW`]
+/// queued events so the burst is drawn once. Returns how many it handled.
+fn drain_burst(app: &mut App, events: &mut mpsc::UnboundedReceiver<Event>) -> usize {
+    for handled in 0..MAX_EVENTS_PER_DRAW {
+        let Ok(event) = events.try_recv() else {
+            return handled;
+        };
+        app.on_event(event);
+    }
+    MAX_EVENTS_PER_DRAW
 }
 
 #[cfg(test)]
@@ -316,6 +329,35 @@ mod tests {
             private_files: vec![],
         }));
         app
+    }
+
+    #[test]
+    fn a_flood_of_events_is_drained_in_slices() {
+        let mut app = app_with_results();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let flood = 2_000;
+        for _ in 0..flood {
+            tx.send(Event::SearchResult(SearchResponse {
+                username: "bob".into(),
+                token: 99,
+                files: vec![],
+                slot_free: true,
+                avg_speed: 0,
+                queue_length: 0,
+                private_files: vec![],
+            }))
+            .unwrap();
+        }
+        let first = drain_burst(&mut app, &mut rx);
+        assert!(first < flood, "one pass handled the whole flood");
+        let mut total = first;
+        loop {
+            match drain_burst(&mut app, &mut rx) {
+                0 => break,
+                n => total += n,
+            }
+        }
+        assert_eq!(total, flood);
     }
 
     fn draw(app: &mut App) -> String {

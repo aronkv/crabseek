@@ -159,7 +159,7 @@ impl Actor {
                 query,
             } if candidate.level.is_some() => {
                 self.adopt_parent(&username).await;
-                self.on_search_request(searcher, token, query).await;
+                self.on_search_request(searcher, token, query);
             }
             _ => {}
         }
@@ -205,7 +205,7 @@ impl Actor {
                 username,
                 token,
                 query,
-            } => self.on_search_request(username, token, query).await,
+            } => self.on_search_request(username, token, query),
             DistribMsg::BranchLevel(level) => {
                 if let Some(p) = &mut self.distrib.parent {
                     p.level = level;
@@ -258,7 +258,7 @@ impl Actor {
                 username,
                 token,
                 query,
-            }) => self.on_search_request(username, token, query).await,
+            }) => self.on_search_request(username, token, query),
             Ok(_) => {}
             Err(e) => tracing::debug!(%e, "bad embedded message from server"),
         }

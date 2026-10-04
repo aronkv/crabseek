@@ -322,10 +322,13 @@ impl App {
 
     /// Called on every tick: runs the wishlist query whose turn it is.
     pub fn tick(&mut self) {
-        if let Some(index) = self.wishlist.due(Instant::now()) {
+        let now = Instant::now();
+        self.transfers.tick(now);
+        self.uploads.tick(now);
+        if let Some(index) = self.wishlist.due(now) {
             self.run_wish(index);
         }
-        if let Some((summary, body)) = self.download_batch.take_due(Instant::now()) {
+        if let Some((summary, body)) = self.download_batch.take_due(now) {
             notify::send(summary, body);
         }
     }
@@ -438,10 +441,20 @@ impl App {
     pub fn on_event(&mut self, event: Event) {
         match event {
             Event::SearchResult(resp) => {
-                if self.search.as_ref().is_some_and(|s| s.token == resp.token) {
+                let searched = self.search.as_ref().is_some_and(|s| s.token == resp.token);
+                // Only a response that both lists want is copied.
+                let wished = if !self.wishlist.wants(resp.token) {
+                    if searched {
+                        self.results.add(resp);
+                    }
+                    None
+                } else if searched {
                     self.results.add(resp.clone());
-                }
-                if let Some((query, new)) = self.wishlist.on_result(resp)
+                    self.wishlist.on_result(resp)
+                } else {
+                    self.wishlist.on_result(resp)
+                };
+                if let Some((query, new)) = wished
                     && new > 0
                 {
                     self.status = format!("wishlist: {new} new files for {query:?}");
