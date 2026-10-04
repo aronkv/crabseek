@@ -347,6 +347,55 @@ impl ResultColumns {
     }
 }
 
+/// Columns of the Downloads and Uploads lists. On a narrow terminal the
+/// user goes first, then the bar shrinks, so the file name keeps
+/// [`NAME_MIN`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TransferColumns {
+    bar: usize,
+    user: bool,
+    name: usize,
+}
+
+impl TransferColumns {
+    const STATUS_W: usize = 12;
+    const SPEED_W: usize = 11;
+    const USER_W: usize = 18;
+
+    fn fit(width: u16) -> Self {
+        let with = |bar: usize, user: bool| {
+            // The bar is followed by its percentage; each column after the
+            // first is preceded by one space.
+            let mut taken = Self::STATUS_W + 1 + bar + 6 + 1 + Self::SPEED_W + 1;
+            if user {
+                taken += Self::USER_W + 1;
+            }
+            Self {
+                bar,
+                user,
+                name: usize::from(width).saturating_sub(taken),
+            }
+        };
+        [with(20, true), with(20, false)]
+            .into_iter()
+            .find(|c| c.name >= usize::from(NAME_MIN))
+            .unwrap_or_else(|| with(10, false))
+    }
+
+    fn widths(self) -> Vec<Constraint> {
+        let mut widths = vec![
+            Constraint::Length(Self::STATUS_W as u16),
+            Constraint::Length(self.bar as u16 + 6),
+            Constraint::Length(Self::SPEED_W as u16),
+        ];
+        if self.user {
+            widths.push(Constraint::Length(Self::USER_W as u16));
+        }
+        widths.push(Constraint::Fill(1));
+        widths
+    }
+}
+
 fn result_row(
     results: &Results,
     row: Row,
@@ -426,6 +475,7 @@ fn render_transfers(frame: &mut Frame, app: &mut App, area: Rect) {
         let selected = app.transfers.selected;
         app.transfers_offset = scroll(app.transfers_offset, selected, height);
         let offset = app.transfers_offset;
+        let cols = TransferColumns::fit(inner.width);
 
         let rows: Vec<TableRow> = app
             .transfers
@@ -446,7 +496,7 @@ fn render_transfers(frame: &mut Frame, app: &mut App, area: Rect) {
                     ),
                     DownloadState::Transferring { received, size } => (
                         Span::raw("downloading").cyan(),
-                        progress_bar(*received, *size, 20),
+                        progress_bar(*received, *size, cols.bar),
                         if t.meter.speed > 0.0 {
                             format!("{}/s", human_size(t.meter.speed as u64))
                         } else {
@@ -455,33 +505,27 @@ fn render_transfers(frame: &mut Frame, app: &mut App, area: Rect) {
                     ),
                     DownloadState::Completed { .. } => (
                         Span::raw("done").green(),
-                        progress_bar(1, 1, 20),
+                        progress_bar(1, 1, cols.bar),
                         String::new(),
                     ),
                     DownloadState::Failed { .. } => {
                         (Span::raw("failed").red(), Line::default(), String::new())
                     }
                 };
-                TableRow::new(vec![
+                let mut row = vec![
                     Cell::from(status),
                     Cell::from(bar),
                     Cell::from(speed),
                     Cell::from(ellipsis(&t.username, 18)).cyan(),
-                    Cell::from(t.basename().to_owned()),
-                ])
+                    Cell::from(ellipsis(t.basename(), cols.name)),
+                ];
+                if !cols.user {
+                    row.remove(3);
+                }
+                TableRow::new(row)
             })
             .collect();
-        let table = Table::new(
-            rows,
-            [
-                Constraint::Length(12),
-                Constraint::Length(26),
-                Constraint::Length(11),
-                Constraint::Length(18),
-                Constraint::Fill(1),
-            ],
-        )
-        .row_highlight_style(SELECTED);
+        let table = Table::new(rows, cols.widths()).row_highlight_style(SELECTED);
         let mut state = TableState::new().with_selected(Some(selected - offset));
         frame.render_stateful_widget(table, inner, &mut state);
     }
@@ -618,6 +662,7 @@ fn render_uploads(frame: &mut Frame, app: &mut App, area: Rect) {
     let selected = app.uploads.selected;
     app.uploads_offset = scroll(app.uploads_offset, selected, height);
     let offset = app.uploads_offset;
+    let cols = TransferColumns::fit(inner.width);
     let rows: Vec<TableRow> = app
         .uploads
         .list
@@ -636,7 +681,7 @@ fn render_uploads(frame: &mut Frame, app: &mut App, area: Rect) {
                 ),
                 UploadState::Transferring { sent, size } => (
                     Span::raw("uploading").cyan(),
-                    progress_bar(*sent, *size, 20),
+                    progress_bar(*sent, *size, cols.bar),
                     if u.meter.speed > 0.0 {
                         format!("{}/s", human_size(u.meter.speed as u64))
                     } else {
@@ -645,35 +690,29 @@ fn render_uploads(frame: &mut Frame, app: &mut App, area: Rect) {
                 ),
                 UploadState::Completed => (
                     Span::raw("done").green(),
-                    progress_bar(1, 1, 20),
+                    progress_bar(1, 1, cols.bar),
                     String::new(),
                 ),
                 UploadState::Failed { reason } => (
                     Span::raw("failed").red(),
-                    Line::from(ellipsis(reason, 26)).dark_gray(),
+                    Line::from(ellipsis(reason, cols.bar + 6)).dark_gray(),
                     String::new(),
                 ),
             };
-            TableRow::new(vec![
+            let mut row = vec![
                 Cell::from(status),
                 Cell::from(bar),
                 Cell::from(speed),
                 Cell::from(ellipsis(&u.username, 18)).cyan(),
-                Cell::from(u.basename().to_owned()),
-            ])
+                Cell::from(ellipsis(u.basename(), cols.name)),
+            ];
+            if !cols.user {
+                row.remove(3);
+            }
+            TableRow::new(row)
         })
         .collect();
-    let table = Table::new(
-        rows,
-        [
-            Constraint::Length(12),
-            Constraint::Length(26),
-            Constraint::Length(11),
-            Constraint::Length(18),
-            Constraint::Fill(1),
-        ],
-    )
-    .row_highlight_style(SELECTED);
+    let table = Table::new(rows, cols.widths()).row_highlight_style(SELECTED);
     let mut state = TableState::new().with_selected(Some(selected - offset));
     frame.render_stateful_widget(table, inner, &mut state);
 }
@@ -1380,6 +1419,18 @@ mod tests {
         assert_eq!(ellipsis("abc", 0), "");
         assert_eq!(ellipsis_start("a\\b\\track.flac", 8), "…ck.flac");
         assert_eq!(ellipsis_start("日本語", 4), "…語");
+    }
+
+    #[test]
+    fn narrow_transfer_lists_drop_the_user_then_shrink_the_bar() {
+        let wide = TransferColumns::fit(108);
+        assert_eq!((wide.bar, wide.user), (20, true));
+        let mid = TransferColumns::fit(90);
+        assert_eq!((mid.bar, mid.user), (20, false));
+        // 80 columns minus the borders.
+        let at_80 = TransferColumns::fit(78);
+        assert_eq!((at_80.bar, at_80.user), (10, false));
+        assert!(at_80.name >= usize::from(NAME_MIN), "{at_80:?}");
     }
 
     #[test]

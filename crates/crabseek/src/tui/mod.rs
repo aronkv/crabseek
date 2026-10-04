@@ -434,6 +434,27 @@ mod tests {
     }
 
     #[test]
+    fn downloads_stay_readable_at_80_columns() {
+        let mut app = app_with_results();
+        app.tab = Tab::Transfers;
+        app.on_event(Event::Download {
+            id: 1,
+            username: "alice".into(),
+            filename: "a\\01 - Ready Lets Go.flac".into(),
+            state: DownloadState::Transferring {
+                received: 15_000_000,
+                size: 30_000_000,
+            },
+        });
+        let screen = draw_at(&mut app, 80, 16);
+        println!("{screen}");
+        // The list row itself, not the detail pane below it.
+        let row = screen.lines().find(|l| l.contains("downloading")).unwrap();
+        assert!(row.contains("50%"));
+        assert!(row.contains("01 - Ready Lets Go.flac"), "{row}");
+    }
+
+    #[test]
     fn renders_login() {
         let mut form = LoginForm::new("alice".into());
         form.on_key(KeyEvent::from(KeyCode::Char('x')));
