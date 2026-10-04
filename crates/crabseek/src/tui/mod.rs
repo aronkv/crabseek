@@ -517,6 +517,35 @@ mod tests {
         assert_eq!(buf[(x, y)].fg, Color::DarkGray, "{}", row(y));
     }
 
+    /// The first row inside the bordered list that starts at column `x`.
+    fn first_list_row(app: &mut App, x: usize) -> String {
+        let screen = draw(app);
+        let line = screen.lines().nth(2).unwrap();
+        line.chars().skip(x + 1).take(20).collect()
+    }
+
+    #[test]
+    fn lists_scroll_only_at_their_edges() {
+        use crossterm::event::KeyModifiers;
+        let mut app = app_with_results();
+        for i in 0..40 {
+            app.wishlist.add(&format!("query {i:02}"));
+            app.chats.open(&format!("user{i:02}"));
+        }
+        // Going up from the bottom keeps the view still until the top edge.
+        app.on_key(KeyEvent::new(KeyCode::Char('7'), KeyModifiers::ALT));
+        app.on_key(KeyEvent::from(KeyCode::Char('G')));
+        let top = first_list_row(&mut app, 0);
+        app.on_key(KeyEvent::from(KeyCode::Char('k')));
+        assert_eq!(first_list_row(&mut app, 0), top, "wishlist");
+
+        app.on_key(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::ALT));
+        app.on_key(KeyEvent::from(KeyCode::Char('G')));
+        let top = first_list_row(&mut app, 0);
+        app.on_key(KeyEvent::from(KeyCode::Char('k')));
+        assert_eq!(first_list_row(&mut app, 0), top, "conversations");
+    }
+
     #[test]
     fn renders_transfers() {
         let mut app = app_with_results();

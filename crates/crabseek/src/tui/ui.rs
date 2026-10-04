@@ -786,7 +786,7 @@ fn render_chat(frame: &mut Frame, app: &mut App, area: Rect) {
     let inner = Block::bordered().inner(messages_area);
     app.chats.page = inner.height.into();
     // Clamped here, where the conversation's length in lines is known.
-    let (lines, scroll) = match app.chats.selected() {
+    let (lines, lines_up) = match app.chats.selected() {
         Some(conv) => conversation_lines(
             conv,
             &app.username,
@@ -796,7 +796,11 @@ fn render_chat(frame: &mut Frame, app: &mut App, area: Rect) {
         ),
         None => (Vec::new(), 0),
     };
-    app.chats.scroll = scroll;
+    app.chats.scroll = lines_up;
+    // Kept between frames, so the list only scrolls when the cursor
+    // reaches its edge.
+    let list_height = usize::from(list_area.height.saturating_sub(2));
+    app.chats_offset = scroll(app.chats_offset, app.chats.selected, list_height);
     let chats = &app.chats;
 
     // Conversations.
@@ -824,13 +828,16 @@ fn render_chat(frame: &mut Frame, app: &mut App, area: Rect) {
         .collect();
     let table = Table::new(rows, [Constraint::Fill(1), Constraint::Length(4)])
         .row_highlight_style(SELECTED);
-    let mut state =
-        TableState::new().with_selected((!chats.list.is_empty()).then_some(chats.selected));
+    let mut state = TableState::new()
+        .with_offset(app.chats_offset)
+        .with_selected((!chats.list.is_empty()).then_some(chats.selected));
     frame.render_stateful_widget(table, list_inner, &mut state);
 
     // The selected conversation and the input box.
     let title = match chats.selected() {
-        Some(c) if scroll > 0 => format!(" {} · {scroll} lines up, PgDn for newer ", c.username),
+        Some(c) if lines_up > 0 => {
+            format!(" {} · {lines_up} lines up, PgDn for newer ", c.username)
+        }
         Some(c) => format!(" {} ", c.username),
         None => " Private messages ".to_owned(),
     };
@@ -965,7 +972,12 @@ fn render_wishlist(frame: &mut Frame, app: &mut App, area: Rect) {
     } else {
         SELECTED
     });
-    let mut state = TableState::new().with_selected(Some(w.selected));
+    // Kept between frames, so the list only scrolls when the cursor
+    // reaches its edge.
+    app.wishlist_offset = scroll(app.wishlist_offset, w.selected, inner.height.into());
+    let mut state = TableState::new()
+        .with_offset(app.wishlist_offset)
+        .with_selected(Some(w.selected));
     frame.render_stateful_widget(table, inner, &mut state);
 }
 

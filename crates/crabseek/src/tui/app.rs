@@ -128,6 +128,10 @@ pub struct App {
     pub uploads_offset: usize,
     pub buddies: Buddies,
     pub buddies_offset: usize,
+    /// First visible row of the Chat tab's conversation list.
+    pub chats_offset: usize,
+    /// First visible row of the wishlist.
+    pub wishlist_offset: usize,
     pub shares: SharesStatus,
     pub distrib: DistribStatus,
     pub portmap: PortMapStatus,
@@ -198,6 +202,8 @@ impl App {
             uploads_offset: 0,
             buddies: Buddies::default(),
             buddies_offset: 0,
+            chats_offset: 0,
+            wishlist_offset: 0,
             shares: SharesStatus::Scanning,
             distrib: DistribStatus::Searching,
             portmap: if cfg.upnp {
