@@ -1012,4 +1012,23 @@ mod tests {
         app.on_key(KeyEvent::from(KeyCode::Char('d')));
         assert_eq!(app.status, "client has shut down");
     }
+
+    #[test]
+    fn errors_show_red_in_the_status_line() {
+        use ratatui::style::Color;
+        let status_fg = |app: &mut App| {
+            let mut terminal = Terminal::new(TestBackend::new(110, 16)).unwrap();
+            terminal.draw(|f| ui::render(f, app)).unwrap();
+            // The status line sits above the help line.
+            let buf = terminal.backend().buffer();
+            buf[(0, buf.area.height - 2)].fg
+        };
+        let mut app = app_with_results();
+        app.on_key(KeyEvent::from(KeyCode::Char('d')));
+        assert_eq!(status_fg(&mut app), Color::Red);
+        // Any later status is a normal one again.
+        app.on_key(KeyEvent::from(KeyCode::Char('w')));
+        assert!(app.status.contains("wishlist"), "{}", app.status);
+        assert_eq!(status_fg(&mut app), Color::Yellow);
+    }
 }

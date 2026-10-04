@@ -50,7 +50,13 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         Tab::Chat => render_chat(frame, app, body),
     }
     frame.render_widget(
-        Paragraph::new(app.status.as_str()).fg(Color::Yellow),
+        Paragraph::new(app.status.as_str()).fg(
+            if app.status_error.as_deref() == Some(app.status.as_str()) {
+                Color::Red
+            } else {
+                Color::Yellow
+            },
+        ),
         status,
     );
     let mut help_spans = Vec::new();

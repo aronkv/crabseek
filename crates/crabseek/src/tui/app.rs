@@ -135,6 +135,9 @@ pub struct App {
     pub searches_answered: u64,
     pub settings: Settings,
     pub status: String,
+    /// The last error put in the status line. It shows in red while the
+    /// status still says it; any later status turns it back to normal.
+    pub status_error: Option<String>,
     pub connected: bool,
     /// Rows visible in the current list, for page up/down.
     pub page_size: usize,
@@ -210,6 +213,7 @@ impl App {
                 cfg.shared_dirs()?,
             ),
             status: String::new(),
+            status_error: None,
             connected: true,
             page_size: 10,
             quit: false,
@@ -322,7 +326,7 @@ impl App {
                     let _ = self.client.stop_search(old);
                 }
             }
-            Err(e) => self.status = e.to_string(),
+            Err(e) => self.fail(e.to_string()),
         }
     }
 
@@ -377,26 +381,33 @@ impl App {
             format!("{username} is already a buddy")
         } else {
             let _ = self.client.watch_user(username);
-            self.save_buddies(format!("added {username} to buddies"))
+            return self.save_buddies(format!("added {username} to buddies"));
         };
     }
 
     fn remove_selected_buddy(&mut self) {
         if let Some(username) = self.buddies.remove_selected() {
             let _ = self.client.unwatch_user(&username);
-            self.status = self.save_buddies(format!("removed {username} from buddies"));
+            self.save_buddies(format!("removed {username} from buddies"));
         }
     }
 
-    /// Returns `done`, or the error if saving failed.
-    fn save_buddies(&self, done: String) -> String {
-        let Some(path) = &self.buddies_path else {
-            return done;
+    /// Saves the buddy list; the status says `done`, or why it failed.
+    fn save_buddies(&mut self, done: String) {
+        let saved = match &self.buddies_path {
+            Some(path) => persist::save_buddies(path, &self.buddies.names()),
+            None => Ok(()),
         };
-        match persist::save_buddies(path, &self.buddies.names()) {
-            Ok(()) => done,
-            Err(e) => format!("could not save the buddy list: {e:#}"),
+        match saved {
+            Ok(()) => self.status = done,
+            Err(e) => self.fail(format!("could not save the buddy list: {e:#}")),
         }
+    }
+
+    /// Shows `message` in the status line as an error.
+    fn fail(&mut self, message: String) {
+        self.status_error = Some(message.clone());
+        self.status = message;
     }
 
     /// The server does not push stat changes for watched users, so they
@@ -430,7 +441,7 @@ impl App {
             if let Some(path) = &self.chats_path
                 && let Err(e) = chat::save(path, &self.chats.list)
             {
-                self.status = format!("could not save the chats: {e:#}");
+                self.fail(format!("could not save the chats: {e:#}"));
             }
         }
         if !self.transfers.dirty {
@@ -440,7 +451,7 @@ impl App {
         if let Some(path) = &self.downloads_path
             && let Err(e) = persist::save(path, &self.transfers.snapshot())
         {
-            self.status = format!("could not save the download list: {e:#}");
+            self.fail(format!("could not save the download list: {e:#}"));
         }
     }
 
@@ -547,24 +558,25 @@ impl App {
             } => {
                 self.shares = SharesStatus::Ready { folders, files };
                 if let Some(first) = errors.first() {
-                    self.status = format!("sharing problem: {first}");
+                    self.fail(format!("sharing problem: {first}"));
                 }
             }
             Event::ListenPort { port, result } => {
-                self.status = match result
+                match result
                     .map_err(anyhow::Error::msg)
                     .and_then(|()| config::save_listen_port(port))
                 {
                     Ok(()) => {
                         self.settings.listen_port = port;
-                        format!("listening on port {port} – forward it on your router")
+                        self.status =
+                            format!("listening on port {port} – forward it on your router");
                     }
-                    Err(e) => format!("could not use port {port}: {e:#}"),
-                };
+                    Err(e) => self.fail(format!("could not use port {port}: {e:#}")),
+                }
             }
             Event::ServerClosed { reason } => {
                 self.connected = false;
-                self.status = format!("disconnected from server: {reason}");
+                self.fail(format!("disconnected from server: {reason}"));
             }
             Event::ServerMessage(ServerResponse::WatchUser { username, user }) => {
                 self.buddies.on_watch(&username, user)
@@ -782,7 +794,7 @@ impl App {
                     }
                     match self.client.message_user(&user, &message) {
                         Ok(()) => self.chats.sent(&user, message, chat::now()),
-                        Err(e) => self.status = e.to_string(),
+                        Err(e) => self.fail(e.to_string()),
                     }
                 }
                 None => {}
@@ -902,10 +914,10 @@ impl App {
                 format!("downloads now go to {}", config::display_path(&dir))
             }),
             SettingsAction::SetListenPort(port) => {
-                self.status = match self.client.set_listen_port(port) {
-                    Ok(()) => format!("switching to port {port}..."),
-                    Err(e) => e.to_string(),
-                };
+                match self.client.set_listen_port(port) {
+                    Ok(()) => self.status = format!("switching to port {port}..."),
+                    Err(e) => self.fail(e.to_string()),
+                }
                 return;
             }
             SettingsAction::SetBackground(enabled) => config::save_background(enabled).map(|()| {
@@ -949,10 +961,10 @@ impl App {
                 "shared folders saved, rescanning...".to_owned()
             }),
         };
-        self.status = match result {
-            Ok(msg) => msg,
-            Err(e) => format!("could not save the config: {e:#}"),
-        };
+        match result {
+            Ok(msg) => self.status = msg,
+            Err(e) => self.fail(format!("could not save the config: {e:#}")),
+        }
     }
 
     fn on_uploads_key(&mut self, key: KeyEvent, count: Option<usize>) {
@@ -1056,7 +1068,7 @@ impl App {
             error: None,
         });
         if let Err(e) = self.client.browse(username) {
-            self.status = e.to_string();
+            self.fail(e.to_string());
         }
     }
 
@@ -1082,7 +1094,7 @@ impl App {
                 self.results_offset = 0;
                 self.status.clear();
             }
-            Err(e) => self.status = e.to_string(),
+            Err(e) => self.fail(e.to_string()),
         }
     }
 
@@ -1152,7 +1164,7 @@ impl App {
             match self.client.download(user, filename) {
                 Ok(_) => queued += 1,
                 Err(e) => {
-                    self.status = e.to_string();
+                    self.fail(e.to_string());
                     return;
                 }
             }
