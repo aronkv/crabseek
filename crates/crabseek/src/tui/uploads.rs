@@ -1,5 +1,7 @@
 //! The upload list shown on the Uploads tab.
 
+use std::time::Instant;
+
 use crabseek_net::{UploadId, UploadState};
 
 use super::transfers::{SpeedMeter, basename};
@@ -55,6 +57,13 @@ impl Uploads {
             _ => row.meter.reset(),
         }
         row.state = state;
+    }
+
+    /// Lets the speeds of stalled uploads fall.
+    pub fn tick(&mut self, now: Instant) {
+        for u in &mut self.list {
+            u.meter.decay(now);
+        }
     }
 
     pub fn selected(&self) -> Option<&UploadRow> {
