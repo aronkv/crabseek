@@ -1,5 +1,6 @@
 //! The download list shown on the Transfers tab.
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
 use crabseek_net::{DownloadId, DownloadState};
@@ -94,6 +95,9 @@ pub struct Transfers {
     pub selected: usize,
     /// Something worth saving changed (not just progress).
     pub dirty: bool,
+    /// Removed from the list; a running one still reports its cancel,
+    /// which must not bring the row back.
+    removed: HashSet<DownloadId>,
 }
 
 impl Transfers {
@@ -104,6 +108,9 @@ impl Transfers {
         filename: String,
         state: DownloadState,
     ) {
+        if self.removed.contains(&id) {
+            return;
+        }
         let t = match self.list.iter_mut().find(|t| t.id == id) {
             Some(t) => {
                 if std::mem::discriminant(&t.state) != std::mem::discriminant(&state) {
@@ -154,6 +161,7 @@ impl Transfers {
 
     pub fn remove(&mut self, id: DownloadId) {
         self.list.retain(|t| t.id != id);
+        self.removed.insert(id);
         self.dirty = true;
         self.clamp();
     }

@@ -9,6 +9,8 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
+use super::input::TextInput;
+
 /// The server's limit for usernames.
 const MAX_USERNAME: usize = 30;
 
@@ -25,8 +27,8 @@ pub enum LoginAction {
 }
 
 pub struct LoginForm {
-    username: String,
-    password: String,
+    username: TextInput,
+    password: TextInput,
     field: Field,
     pub error: Option<String>,
     pub busy: bool,
@@ -40,8 +42,8 @@ impl LoginForm {
             Field::Password
         };
         Self {
-            username,
-            password: String::new(),
+            username: TextInput::new(username),
+            password: TextInput::default(),
             field,
             error: None,
             busy: false,
@@ -51,7 +53,7 @@ impl LoginForm {
     /// After a failed attempt: keep the username, ask for the password again.
     pub fn failed(&mut self, error: String) {
         self.error = Some(error);
-        self.password.clear();
+        self.password = TextInput::default();
         self.field = Field::Password;
         self.busy = false;
     }
@@ -76,26 +78,23 @@ impl LoginForm {
                 }
             }
             KeyCode::Enter => {
-                if self.field == Field::Username && self.password.is_empty() {
+                if self.field == Field::Username && self.password.text().is_empty() {
                     self.field = Field::Password;
                     return LoginAction::None;
                 }
-                match validate(&self.username, &self.password) {
+                match validate(self.username.text(), self.password.text()) {
                     Ok(()) => {
                         return LoginAction::Submit {
-                            username: self.username.clone(),
-                            password: self.password.clone(),
+                            username: self.username.text().to_owned(),
+                            password: self.password.text().to_owned(),
                         };
                     }
                     Err(e) => self.error = Some(e.to_owned()),
                 }
             }
-            KeyCode::Backspace => {
-                text.pop();
+            _ => {
+                text.on_key(key);
             }
-            KeyCode::Char('u') if ctrl => text.clear(),
-            KeyCode::Char(c) if !ctrl => text.push(c),
-            _ => {}
         }
         LoginAction::None
     }
@@ -204,11 +203,11 @@ pub fn render(frame: &mut Frame, form: &LoginForm, config_path: &str) {
     };
     frame.render_widget(Paragraph::new("Username").dark_gray(), user_label);
     frame.render_widget(
-        Paragraph::new(format!(" {}", form.username)).style(field_style(Field::Username)),
+        Paragraph::new(format!(" {}", form.username.text())).style(field_style(Field::Username)),
         user_box,
     );
     frame.render_widget(Paragraph::new("Password").dark_gray(), pass_label);
-    let masked = "•".repeat(form.password.chars().count());
+    let masked = "•".repeat(form.password.text().chars().count());
     frame.render_widget(
         Paragraph::new(format!(" {masked}")).style(field_style(Field::Password)),
         pass_box,
@@ -226,7 +225,7 @@ pub fn render(frame: &mut Frame, form: &LoginForm, config_path: &str) {
     );
 
     let status_line = if form.busy {
-        Line::from(format!("Connecting as {}...", form.username)).yellow()
+        Line::from(format!("Connecting as {}...", form.username.text())).yellow()
     } else if let Some(error) = &form.error {
         Line::from(error.as_str()).red()
     } else {
@@ -239,8 +238,8 @@ pub fn render(frame: &mut Frame, form: &LoginForm, config_path: &str) {
 
     if !form.busy {
         let (row, len) = match form.field {
-            Field::Username => (user_box, form.username.width()),
-            Field::Password => (pass_box, form.password.chars().count()),
+            Field::Username => (user_box, form.username.before_cursor().width()),
+            Field::Password => (pass_box, form.password.before_cursor().chars().count()),
         };
         let x = (row.x + 1 + len as u16).min(row.right().saturating_sub(1));
         frame.set_cursor_position(Position::new(x, row.y));
@@ -327,8 +326,8 @@ mod tests {
         let mut form = LoginForm::new("alice".into());
         type_text(&mut form, "wrong");
         form.failed("Wrong password for this username.".into());
-        assert_eq!(form.username, "alice");
-        assert!(form.password.is_empty());
+        assert_eq!(form.username.text(), "alice");
+        assert!(form.password.text().is_empty());
         assert_eq!(form.field, Field::Password);
     }
 

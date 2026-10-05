@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 use crabseek_proto::search::SearchResponse;
 
+use super::input::TextInput;
 use super::results::Results;
 
 /// The server's usual interval until it tells us otherwise.
@@ -51,7 +52,7 @@ pub struct Wishlist {
     /// Round-robin position.
     next: usize,
     /// A query being typed on the Wishlist tab.
-    pub adding: Option<String>,
+    pub adding: Option<TextInput>,
 }
 
 impl Default for Wishlist {

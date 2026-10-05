@@ -3,6 +3,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::input::TextInput;
+
 /// Older messages are dropped beyond this, per conversation.
 const MAX_MESSAGES: usize = 500;
 
@@ -23,12 +25,12 @@ pub struct Conversation {
 }
 
 /// What is being typed on the Chat tab.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum ChatInput {
     /// A message to the selected conversation.
-    Message(String),
+    Message(TextInput),
     /// The username of a new conversation.
-    NewUser(String),
+    NewUser(TextInput),
 }
 
 #[derive(Default)]

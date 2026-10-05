@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
+use super::input::TextInput;
 use crate::config::{display_path, expand_home};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,7 +22,7 @@ pub enum Item {
 
 pub struct Edit {
     pub item: Item,
-    pub text: String,
+    pub text: TextInput,
 }
 
 /// What the app should do after a key press on this tab.
@@ -89,6 +90,11 @@ impl Settings {
         items[self.selected.min(items.len() - 1)]
     }
 
+    pub fn move_by(&mut self, delta: isize) {
+        let last = self.items().len() - 1;
+        self.selected = self.selected.saturating_add_signed(delta).min(last);
+    }
+
     pub fn is_editing(&self) -> bool {
         self.edit.is_some()
     }
@@ -99,10 +105,6 @@ impl Settings {
         }
         let count = self.items().len();
         match key.code {
-            KeyCode::Down | KeyCode::Char('j') => {
-                self.selected = (self.selected + 1).min(count - 1)
-            }
-            KeyCode::Up | KeyCode::Char('k') => self.selected = self.selected.saturating_sub(1),
             // The UPnP switch toggles instead of opening an editor.
             KeyCode::Enter | KeyCode::Char('e' | ' ') if self.selected_item() == Item::Upnp => {
                 self.upnp = !self.upnp;
@@ -146,31 +148,34 @@ impl Settings {
             Item::AddShared => "~/".to_owned(),
         };
         self.error = None;
-        self.edit = Some(Edit { item, text });
+        self.edit = Some(Edit {
+            item,
+            text: TextInput::new(text),
+        });
     }
 
     fn on_edit_key(&mut self, key: KeyEvent) -> SettingsAction {
         let edit = self.edit.as_mut().expect("editing");
         match key.code {
             KeyCode::Esc => self.edit = None,
-            KeyCode::Tab if edit.item != Item::ListenPort => edit.text = complete(&edit.text),
-            KeyCode::Char(c) if edit.item == Item::ListenPort && !c.is_ascii_digit() => {}
-            KeyCode::Backspace => {
-                edit.text.pop();
+            KeyCode::Tab if edit.item != Item::ListenPort => {
+                edit.text.set(complete(edit.text.text()))
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                edit.text.clear()
-            }
-            KeyCode::Char(c) => edit.text.push(c),
+            KeyCode::Char(c)
+                if edit.item == Item::ListenPort
+                    && !c.is_ascii_digit()
+                    && key.modifiers.difference(KeyModifiers::SHIFT).is_empty() => {}
             KeyCode::Enter => return self.commit(),
-            _ => {}
+            _ => {
+                edit.text.on_key(key);
+            }
         }
         SettingsAction::None
     }
 
     fn commit(&mut self) -> SettingsAction {
         let edit = self.edit.as_ref().expect("editing");
-        let text = edit.text.trim();
+        let text = edit.text.text().trim();
         if edit.item == Item::ListenPort {
             return match text.parse::<u16>() {
                 // Ports below 1024 need root.
@@ -335,7 +340,7 @@ mod tests {
         let mut s = Settings::new(dir.join("dl"), 2234, true, vec![]);
 
         s.on_key(key(KeyCode::Char('a')));
-        s.edit.as_mut().unwrap().text.clear();
+        s.edit.as_mut().unwrap().text.set("");
         type_text(&mut s, &format!("{}/Music/", dir.display()));
         let action = s.on_key(key(KeyCode::Enter));
         assert_eq!(
@@ -345,14 +350,22 @@ mod tests {
 
         // Same folder again is refused.
         s.on_key(key(KeyCode::Char('a')));
-        s.edit.as_mut().unwrap().text = format!("{}/Music", dir.display());
+        s.edit
+            .as_mut()
+            .unwrap()
+            .text
+            .set(format!("{}/Music", dir.display()));
         assert_eq!(s.on_key(key(KeyCode::Enter)), SettingsAction::None);
         assert!(s.error.as_deref().unwrap().contains("already shared"));
         s.on_key(key(KeyCode::Esc));
 
         // Missing folders are refused.
         s.on_key(key(KeyCode::Char('a')));
-        s.edit.as_mut().unwrap().text = format!("{}/nope", dir.display());
+        s.edit
+            .as_mut()
+            .unwrap()
+            .text
+            .set(format!("{}/nope", dir.display()));
         assert_eq!(s.on_key(key(KeyCode::Enter)), SettingsAction::None);
         s.on_key(key(KeyCode::Esc));
 
@@ -398,13 +411,13 @@ mod tests {
         let mut s = Settings::new(PathBuf::from("/dl"), 2234, true, vec![]);
         s.selected = 1;
         s.on_key(key(KeyCode::Enter));
-        assert_eq!(s.edit.as_ref().unwrap().text, "2234");
+        assert_eq!(s.edit.as_ref().unwrap().text.text(), "2234");
         s.on_key(key(KeyCode::Char('u')));
         for _ in 0..4 {
             s.on_key(key(KeyCode::Backspace));
         }
         type_text(&mut s, "80x");
-        assert_eq!(s.edit.as_ref().unwrap().text, "80");
+        assert_eq!(s.edit.as_ref().unwrap().text.text(), "80");
         assert_eq!(s.on_key(key(KeyCode::Enter)), SettingsAction::None);
         type_text(&mut s, "00");
         assert_eq!(
@@ -420,13 +433,21 @@ mod tests {
         let dir = temp_tree("dl");
         let mut s = Settings::new(dir.join("dl"), 2234, true, vec![]);
         s.on_key(key(KeyCode::Enter));
-        s.edit.as_mut().unwrap().text = format!("{}/new/place", dir.display());
+        s.edit
+            .as_mut()
+            .unwrap()
+            .text
+            .set(format!("{}/new/place", dir.display()));
         assert_eq!(
             s.on_key(key(KeyCode::Enter)),
             SettingsAction::SetDownloadDir(dir.join("new/place"))
         );
         s.on_key(key(KeyCode::Enter));
-        s.edit.as_mut().unwrap().text = format!("{}/Mfile", dir.display());
+        s.edit
+            .as_mut()
+            .unwrap()
+            .text
+            .set(format!("{}/Mfile", dir.display()));
         assert_eq!(s.on_key(key(KeyCode::Enter)), SettingsAction::None);
         std::fs::remove_dir_all(dir).unwrap();
     }

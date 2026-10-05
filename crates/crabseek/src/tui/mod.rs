@@ -4,6 +4,7 @@ mod app;
 mod buddies;
 mod chat;
 mod help;
+mod input;
 mod login;
 mod notify;
 pub mod remote;
@@ -295,7 +296,7 @@ mod tests {
 
     use crabseek_net::DownloadState;
     use crabseek_proto::search::{SearchFile, SearchResponse};
-    use crossterm::event::{KeyCode, KeyEvent};
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
 
@@ -318,7 +319,7 @@ mod tests {
             query: "boards of canada".into(),
             started: std::time::Instant::now(),
         });
-        app.input = "boards of canada".into();
+        app.input.set("boards of canada");
         app.focus = Focus::List;
         let files = (1..=3)
             .map(|i| SearchFile {
@@ -417,7 +418,7 @@ mod tests {
     fn search_cursor(query: &str) -> (u16, String) {
         let mut app = app_with_results();
         app.focus = Focus::Input;
-        app.input = query.into();
+        app.input.set(query);
         let mut terminal = Terminal::new(TestBackend::new(40, 16)).unwrap();
         terminal.draw(|f| ui::render(f, &mut app)).unwrap();
         let x = terminal.get_cursor_position().unwrap().x;
@@ -443,6 +444,65 @@ mod tests {
         let (x, row) = search_cursor(&long);
         assert!(x < 39, "cursor at {x}, past the border");
         assert!(row.contains("END"), "{row}");
+    }
+
+    #[test]
+    fn search_box_cursor_moves_and_the_view_follows_it() {
+        let mut app = app_with_results();
+        app.on_key(KeyEvent::from(KeyCode::Char('s')));
+        app.input.set(format!("START {} END", "x".repeat(60)));
+        let mut terminal = Terminal::new(TestBackend::new(40, 16)).unwrap();
+        let mut search_box = |app: &mut App| {
+            terminal.draw(|f| ui::render(f, app)).unwrap();
+            let x = terminal.get_cursor_position().unwrap().x;
+            let buf = terminal.backend().buffer();
+            let row = (0..buf.area.height)
+                .map(|y| {
+                    (0..buf.area.width)
+                        .map(|x| buf[(x, y)].symbol())
+                        .collect::<String>()
+                })
+                .find(|l| l.starts_with('│'))
+                .unwrap();
+            (x, row)
+        };
+        let (_, row) = search_box(&mut app);
+        assert!(row.contains("END") && !row.contains("START"), "{row}");
+
+        app.on_key(KeyEvent::from(KeyCode::Home));
+        let (x, row) = search_box(&mut app);
+        assert!(row.contains("START") && !row.contains("END"), "{row}");
+        assert_eq!(x, 1, "right after the border");
+
+        // Typing goes in at the cursor, which stays on screen.
+        app.on_key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL));
+        app.on_key(KeyEvent::from(KeyCode::Char('!')));
+        assert!(app.input.text().starts_with("START! x"));
+        assert_eq!(search_box(&mut app).0, 7);
+        app.on_key(KeyEvent::from(KeyCode::End));
+        let (x, row) = search_box(&mut app);
+        assert!(row.contains("END"), "{row}");
+        assert!(x < 39, "cursor at {x}, past the border");
+    }
+
+    #[test]
+    fn search_box_recalls_earlier_searches() {
+        let mut app = app_with_results();
+        for query in ["aphex", "autechre"] {
+            app.on_key(KeyEvent::from(KeyCode::Char('s')));
+            app.on_key(KeyEvent::new(KeyCode::Char('u'), KeyModifiers::CONTROL));
+            for c in query.chars() {
+                app.on_key(KeyEvent::from(KeyCode::Char(c)));
+            }
+            app.on_key(KeyEvent::from(KeyCode::Enter));
+        }
+        app.on_key(KeyEvent::from(KeyCode::Char('s')));
+        app.on_key(KeyEvent::from(KeyCode::Up));
+        assert_eq!(app.input.text(), "aphex");
+        app.on_key(KeyEvent::from(KeyCode::Down));
+        assert_eq!(app.input.text(), "autechre");
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(app.focus, Focus::List);
     }
 
     #[test]
@@ -476,7 +536,7 @@ mod tests {
             app.tab = tab;
             let screen = draw_at(&mut app, 80, 16);
             let help = screen.lines().last().unwrap();
-            assert!(help.contains("q quit · Tab"), "{tab:?}: {help}");
+            assert!(help.contains("q quit · 1-8 tabs"), "{tab:?}: {help}");
         }
     }
 
@@ -535,7 +595,6 @@ mod tests {
 
     #[test]
     fn lists_scroll_only_at_their_edges() {
-        use crossterm::event::KeyModifiers;
         let mut app = app_with_results();
         for i in 0..40 {
             app.wishlist.add(&format!("query {i:02}"));
@@ -683,30 +742,97 @@ mod tests {
     }
 
     #[test]
-    fn vim_counts_and_alt_tabs() {
-        use crossterm::event::KeyModifiers;
+    fn digits_switch_tabs_and_every_list_moves_alike() {
         let mut app = app_with_results();
         app.on_key(KeyEvent::from(KeyCode::Enter)); // expand: 4 rows
-        app.on_key(KeyEvent::from(KeyCode::Char('3')));
-        assert_eq!(app.count, Some(3));
-        assert!(draw(&mut app).contains(" 3 "));
         app.on_key(KeyEvent::from(KeyCode::Char('j')));
-        assert_eq!(app.count, None);
-        assert_eq!(app.results.selected_index(), Some(3));
-        app.on_key(KeyEvent::from(KeyCode::Char('2')));
-        app.on_key(KeyEvent::from(KeyCode::Up));
-        assert_eq!(app.results.selected_index(), Some(1));
-        app.on_key(KeyEvent::from(KeyCode::Char('1')));
+        app.on_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.results.selected_index(), Some(2));
         app.on_key(KeyEvent::from(KeyCode::Char('G')));
+        assert_eq!(app.results.selected_index(), Some(3));
+        app.on_key(KeyEvent::from(KeyCode::Char('g')));
         assert_eq!(app.results.selected_index(), Some(0));
-        assert_eq!(app.tab, Tab::Search);
+        app.on_key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL));
+        assert_eq!(
+            app.results.selected_index(),
+            Some(3),
+            "half a page, clamped"
+        );
+        app.on_key(KeyEvent::from(KeyCode::Up));
+        assert_eq!(app.results.selected_index(), Some(2));
 
-        app.on_key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::ALT));
+        app.on_key(KeyEvent::from(KeyCode::Char('3')));
         assert_eq!(app.tab, Tab::Uploads);
-        app.on_key(KeyEvent::from(KeyCode::F(4)));
+        app.on_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::ALT));
         assert_eq!(app.tab, Tab::Browse);
-        app.on_key(KeyEvent::from(KeyCode::F(8)));
+        app.on_key(KeyEvent::from(KeyCode::F(5)));
+        assert_eq!(app.tab, Tab::Chat);
+        app.on_key(KeyEvent::from(KeyCode::Char('8')));
         assert_eq!(app.tab, Tab::Settings);
+        // Settings has the same motions as the other lists.
+        app.on_key(KeyEvent::from(KeyCode::Char('G')));
+        assert_eq!(app.settings.selected, app.settings.items().len() - 1);
+        app.on_key(KeyEvent::from(KeyCode::Char('g')));
+        app.on_key(KeyEvent::from(KeyCode::Char('j')));
+        assert_eq!(app.settings.selected, 1);
+        app.on_key(KeyEvent::from(KeyCode::Char('1')));
+        assert_eq!(app.tab, Tab::Search);
+        assert_eq!(app.results.selected_index(), Some(2));
+    }
+
+    #[test]
+    fn enter_on_a_file_downloads_it() {
+        let mut app = app_with_results();
+        app.on_key(KeyEvent::from(KeyCode::Enter)); // open the folder
+        app.on_key(KeyEvent::from(KeyCode::Char('j')));
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        // The offline client refuses, which shows the download was tried
+        // instead of the folder being closed.
+        assert_eq!(app.status, "client has shut down");
+        assert_eq!(app.results.selected_index(), Some(1));
+    }
+
+    #[test]
+    fn x_removes_the_row_and_shift_x_clears_finished() {
+        let mut app = app_with_results();
+        let download = |id, state| Event::Download {
+            id,
+            username: "alice".into(),
+            filename: format!("Music\\{id}.flac"),
+            state,
+        };
+        let done = || DownloadState::Completed {
+            path: "/dl/x.flac".into(),
+        };
+        let failed = || DownloadState::Failed {
+            reason: "cancelled".into(),
+        };
+        app.on_event(download(1, done()));
+        app.on_event(download(
+            2,
+            DownloadState::Transferring {
+                received: 10,
+                size: 100,
+            },
+        ));
+        app.on_event(download(3, failed()));
+        app.on_key(KeyEvent::from(KeyCode::Char('2')));
+        let ids = |app: &App| app.transfers.list.iter().map(|t| t.id).collect::<Vec<_>>();
+
+        app.on_key(KeyEvent::from(KeyCode::Char('x')));
+        assert_eq!(ids(&app), [2, 3]);
+        assert_eq!(app.status, "removed 1.flac");
+        // A running one is cancelled and removed; its cancel arrives later
+        // and must not bring the row back.
+        app.on_key(KeyEvent::from(KeyCode::Char('x')));
+        app.on_event(download(2, failed()));
+        assert_eq!(ids(&app), [3]);
+
+        app.on_event(download(4, done()));
+        app.on_event(download(5, DownloadState::Queued { place: Some(1) }));
+        app.on_key(KeyEvent::new(KeyCode::Char('X'), KeyModifiers::SHIFT));
+        assert_eq!(ids(&app), [5]);
+        assert_eq!(app.status, "cleared 2 finished downloads");
     }
 
     #[test]
@@ -759,7 +885,6 @@ mod tests {
     #[test]
     fn buddies_tab() {
         use crabseek_proto::server::{OnlineStatus, ServerResponse, UserStats, WatchedUser};
-        use crossterm::event::KeyModifiers;
 
         let mut app = app_with_results();
         // `A` on a search result adds its user.
@@ -821,7 +946,6 @@ mod tests {
 
     #[test]
     fn search_box_keys() {
-        use crossterm::event::KeyModifiers;
         let alt_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::ALT);
         let mut app = App::new(
             Client::offline(),
@@ -838,10 +962,10 @@ mod tests {
         assert_eq!(app.focus, Focus::Input);
         // Inside the box `s` is just a letter; Alt-s goes back.
         app.on_key(KeyEvent::from(KeyCode::Char('s')));
-        assert_eq!(app.input, "s");
+        assert_eq!(app.input.text(), "s");
         app.on_key(alt_s);
         assert_eq!(app.focus, Focus::List);
-        assert_eq!(app.input, "s");
+        assert_eq!(app.input.text(), "s");
 
         // Alt-s and `/` open the search from other tabs, even from a
         // text box there.
@@ -888,9 +1012,9 @@ mod tests {
             private_dirs: vec![],
         };
         app.tab = Tab::Browse;
-        // Browse starts on its list; `/` opens the username box.
-        app.on_key(KeyEvent::from(KeyCode::Char('/')));
-        app.browse_input = "alice".into();
+        // Browse starts on its list; `b` opens the username box.
+        app.on_key(KeyEvent::from(KeyCode::Char('b')));
+        app.browse_input.set("alice");
         app.on_key(KeyEvent::from(KeyCode::Enter));
         app.on_event(Event::BrowseResult {
             username: "alice".into(),
@@ -903,8 +1027,8 @@ mod tests {
         assert!(screen.contains("alice: 1 folders, 3 files · [FLAC] 1 folders, 2 files"));
 
         // Browsing someone else keeps FLAC on.
-        app.on_key(KeyEvent::from(KeyCode::Char('/')));
-        app.browse_input = "bob".into();
+        app.on_key(KeyEvent::from(KeyCode::Char('b')));
+        app.browse_input.set("bob");
         app.on_key(KeyEvent::from(KeyCode::Enter));
         assert!(draw(&mut app).contains("bob · [FLAC]"));
         app.on_event(Event::BrowseResult {
@@ -917,7 +1041,6 @@ mod tests {
 
     #[test]
     fn wishlist_from_search_and_tab() {
-        use crossterm::event::KeyModifiers;
         let mut app = app_with_results();
         // `w` on the results keeps the search on the wishlist.
         app.on_key(KeyEvent::from(KeyCode::Char('w')));
@@ -949,7 +1072,7 @@ mod tests {
     fn help_window_scrolls_on_a_short_terminal() {
         let mut app = app_with_results();
         app.on_key(KeyEvent::from(KeyCode::Char('?')));
-        let last = "quit, also in background mode";
+        let last = "confirm / leave the box";
         let screen = draw(&mut app);
         assert!(screen.contains("Help – Search"));
         assert!(screen.contains("PgUp/PgDn scroll"));
@@ -971,7 +1094,6 @@ mod tests {
 
     #[test]
     fn help_window_and_list_focus_on_start() {
-        use crossterm::event::KeyModifiers;
         let mut app = App::new(
             Client::offline(),
             "me".into(),
@@ -1009,7 +1131,6 @@ mod tests {
 
     #[test]
     fn chat_receives_opens_and_renders() {
-        use crossterm::event::KeyModifiers;
         let mut app = app_with_results();
         app.on_event(Event::PrivateMessage {
             timestamp: chat::now(),

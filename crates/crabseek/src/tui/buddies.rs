@@ -3,6 +3,8 @@
 
 use crabseek_proto::server::{OnlineStatus, UserStats, WatchedUser};
 
+use super::input::TextInput;
+
 pub struct Buddy {
     pub username: String,
     /// `None` until the server answered our `WatchUser`.
@@ -33,7 +35,7 @@ pub struct Buddies {
     pub list: Vec<Buddy>,
     pub selected: usize,
     /// The username being typed after `a`.
-    pub adding: Option<String>,
+    pub adding: Option<TextInput>,
 }
 
 impl Buddies {

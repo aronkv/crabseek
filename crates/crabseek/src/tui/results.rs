@@ -373,20 +373,8 @@ impl Results {
         self.selected = Some(rows[next]);
     }
 
-    pub fn move_to_start(&mut self) {
-        self.selected = self.rows().first().copied();
-    }
-
-    /// `G` with a count: jump to row `index` (clamped).
-    pub fn move_to_index(&mut self, index: usize) {
-        let rows = self.rows();
-        if let Some(&row) = rows.get(index.min(rows.len().saturating_sub(1))) {
-            self.selected = Some(row);
-        }
-    }
-
-    pub fn move_to_end(&mut self) {
-        self.selected = self.rows().last().copied();
+    pub fn file_selected(&self) -> bool {
+        matches!(self.selected, Some(Row::File(..)))
     }
 
     /// Expands a collapsed folder or collapses an expanded one; on a file,
@@ -641,14 +629,14 @@ mod tests {
         );
 
         r.set_filter(FormatFilter::All);
-        r.move_to_end(); // e
+        r.move_by(isize::MAX); // e
         r.set_filter(FormatFilter::Flac);
         // Nothing below e passes, so the closest one above.
         assert_eq!(r.selection_files()[0].1, "d\\1.flac");
 
         // A hidden file row moves to its own folder when that still shows.
         r.set_filter(FormatFilter::All);
-        r.move_to_start();
+        r.move_by(isize::MIN);
         r.toggle(); // expand a: a, 1.flac, 2.mp3
         r.move_by(2);
         r.set_filter(FormatFilter::Flac);

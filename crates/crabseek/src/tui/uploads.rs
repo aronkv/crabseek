@@ -1,5 +1,6 @@
 //! The upload list shown on the Uploads tab.
 
+use std::collections::HashSet;
 use std::time::Instant;
 
 use crabseek_net::{UploadId, UploadState};
@@ -32,10 +33,16 @@ pub struct Uploads {
     pub list: Vec<UploadRow>,
     pub selected: usize,
     pub completed: usize,
+    /// Removed from the list; a running one still reports its cancel,
+    /// which must not bring the row back.
+    removed: HashSet<UploadId>,
 }
 
 impl Uploads {
     pub fn update(&mut self, id: UploadId, username: String, filename: String, state: UploadState) {
+        if self.removed.contains(&id) {
+            return;
+        }
         let row = match self.list.iter_mut().position(|u| u.id == id) {
             Some(i) => &mut self.list[i],
             None => {
@@ -78,6 +85,12 @@ impl Uploads {
             .selected
             .saturating_add_signed(delta)
             .min(self.list.len() - 1);
+    }
+
+    pub fn remove(&mut self, id: UploadId) {
+        self.list.retain(|u| u.id != id);
+        self.removed.insert(id);
+        self.selected = self.selected.min(self.list.len().saturating_sub(1));
     }
 
     pub fn clear_finished(&mut self) -> usize {

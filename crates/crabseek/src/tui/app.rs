@@ -11,6 +11,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use super::buddies::Buddies;
 use super::chat::{self, ChatInput, Chats};
+use super::input::{History, TextInput};
 use super::notify::{self, DownloadBatch};
 use super::results::Results;
 use super::settings::{Settings, SettingsAction};
@@ -33,8 +34,8 @@ pub enum Tab {
 }
 
 impl Tab {
-    /// Tab-bar order, close to Nicotine+'s; the numbers (`Alt-1`…`Alt-8`,
-    /// `F1`…`F8`) and titles follow it. Settings stays last.
+    /// Tab-bar order, close to Nicotine+'s; the numbers (`1`…`8`, also
+    /// with Alt, and `F1`…`F8`) and titles follow it. Settings stays last.
     pub const ORDER: [Tab; 8] = [
         Tab::Search,
         Tab::Transfers,
@@ -46,7 +47,7 @@ impl Tab {
         Tab::Settings,
     ];
 
-    /// The tab for `Alt-n` / `Fn`.
+    /// The tab for `n` / `Fn`.
     fn numbered(n: u8) -> Option<Tab> {
         Self::ORDER.get(usize::from(n).checked_sub(1)?).copied()
     }
@@ -112,13 +113,15 @@ pub struct App {
     pub username: String,
     pub tab: Tab,
     pub focus: Focus,
-    pub input: String,
+    pub input: TextInput,
+    /// Queries typed in the search box this session, for Up and Down.
+    search_history: History,
     pub search: Option<ActiveSearch>,
     pub results: Results,
     /// First visible result row; kept by the renderer.
     pub results_offset: usize,
     pub browse: Option<ActiveBrowse>,
-    pub browse_input: String,
+    pub browse_input: TextInput,
     pub browse_focus: Focus,
     pub browse_results: Results,
     pub browse_offset: usize,
@@ -155,8 +158,6 @@ pub struct App {
     pub chats: Chats,
     chats_path: Option<PathBuf>,
     confirm_quit: bool,
-    /// Vim-style count typed before a motion (`10k`).
-    pub count: Option<usize>,
     /// The `?` help window is open.
     pub help: bool,
     /// Lines the help window is scrolled down; clamped when drawn.
@@ -187,12 +188,13 @@ impl App {
             // Start in the list so every key works right away; `s`, `/`
             // or `Alt-s` open the search box.
             focus: Focus::List,
-            input: String::new(),
+            input: TextInput::default(),
+            search_history: History::default(),
             search: None,
             results: Results::default(),
             results_offset: 0,
             browse: None,
-            browse_input: String::new(),
+            browse_input: TextInput::default(),
             browse_focus: Focus::List,
             browse_results: Results::default(),
             browse_offset: 0,
@@ -224,7 +226,6 @@ impl App {
             page_size: 10,
             quit: false,
             confirm_quit: false,
-            count: None,
             help: false,
             help_scroll: 0,
             help_page: 0,
@@ -294,7 +295,7 @@ impl App {
     /// Opens the Chat tab on `username`'s conversation, ready to type.
     fn open_chat(&mut self, username: &str) {
         self.chats.open(username);
-        self.chats.input = Some(ChatInput::Message(String::new()));
+        self.chats.input = Some(ChatInput::Message(TextInput::default()));
         self.tab = Tab::Chat;
     }
 
@@ -362,7 +363,7 @@ impl App {
             query: format!("wishlist: {}", item.query),
             started: item.last_run.unwrap_or_else(Instant::now),
         });
-        self.input = item.query.clone();
+        self.input.set(item.query.clone());
         self.tab = Tab::Search;
         self.focus = Focus::List;
     }
@@ -629,7 +630,6 @@ impl App {
         // `Alt-s` types nothing, so it toggles the search box from
         // anywhere, even while typing in it.
         if key.code == KeyCode::Char('s') && key.modifiers.contains(KeyModifiers::ALT) {
-            self.count = None;
             if self.tab == Tab::Search && self.focus == Focus::Input {
                 self.focus = Focus::List;
             } else {
@@ -664,23 +664,11 @@ impl App {
             return;
         }
 
-        let alt = key.modifiers.contains(KeyModifiers::ALT);
-        // Digits build a count for the next motion, like in vim.
-        if let KeyCode::Char(c @ '0'..='9') = key.code
-            && !alt
-            && (c != '0' || self.count.is_some())
-        {
-            let digit = c as usize - '0' as usize;
-            self.count = Some((self.count.unwrap_or(0) * 10 + digit).min(99_999));
-            return;
-        }
         if key.code == KeyCode::Char('?') {
-            self.count = None;
             self.help = true;
             self.help_scroll = 0;
             return;
         }
-        let count = self.count.take();
         let tab_before = self.tab;
 
         match key.code {
@@ -688,7 +676,7 @@ impl App {
             KeyCode::Char('q' | 'Q') => self.request_quit(),
             KeyCode::Tab => self.tab = self.tab.cycle(1),
             KeyCode::BackTab => self.tab = self.tab.cycle(-1),
-            // Digits only get here with Alt; plain ones are counts.
+            // With or without Alt.
             KeyCode::Char(c @ '1'..='8') => self.tab = Tab::numbered(c as u8 - b'0').unwrap(),
             KeyCode::F(n @ 1..=8) => self.tab = Tab::numbered(n).unwrap(),
             // `m` writes to the user of the selected row.
@@ -703,32 +691,21 @@ impl App {
                     self.add_buddy(&user);
                 }
             }
-            // `/` edits the input of the current tab, or starts a search;
-            // `s` always starts a search.
-            KeyCode::Char('/') if self.tab == Tab::Browse => self.browse_focus = Focus::Input,
             KeyCode::Char('/' | 's') => self.open_search(),
-            _ => match self.tab {
-                Tab::Search => self.on_results_key(key, count, Which::Search),
-                Tab::Browse => self.on_results_key(key, count, Which::Browse),
-                Tab::Transfers => self.on_transfers_key(key, count),
-                Tab::Uploads => self.on_uploads_key(key, count),
-                Tab::Buddies => self.on_buddies_key(key, count),
-                Tab::Wishlist => self.on_wishlist_key(key, count),
-                Tab::Chat => self.on_chat_key(key, count),
-                Tab::Settings => {
-                    // Settings moves one row per key; repeat for a count.
-                    let times = if matches!(
-                        key.code,
-                        KeyCode::Char('j' | 'k') | KeyCode::Up | KeyCode::Down
-                    ) {
-                        count.unwrap_or(1)
-                    } else {
-                        1
-                    };
-                    for _ in 0..times {
-                        self.on_settings_key(key);
-                    }
-                }
+            // On Chat these scroll the open conversation instead.
+            KeyCode::PageUp | KeyCode::PageDown if self.tab == Tab::Chat => self.on_chat_key(key),
+            _ => match list_motion(key, self.page_size) {
+                Some(rows) => self.move_cursor(rows),
+                None => match self.tab {
+                    Tab::Search => self.on_results_key(key, Which::Search),
+                    Tab::Browse => self.on_results_key(key, Which::Browse),
+                    Tab::Transfers => self.on_transfers_key(key),
+                    Tab::Uploads => self.on_uploads_key(key),
+                    Tab::Buddies => self.on_buddies_key(key),
+                    Tab::Wishlist => self.on_wishlist_key(key),
+                    Tab::Chat => self.on_chat_key(key),
+                    Tab::Settings => self.on_settings_key(key),
+                },
             },
         }
         if self.tab == Tab::Buddies && tab_before != Tab::Buddies {
@@ -736,20 +713,32 @@ impl App {
         }
     }
 
-    fn on_chat_key(&mut self, key: KeyEvent, count: Option<usize>) {
-        let n = count.unwrap_or(1) as isize;
+    /// Moves the current tab's list cursor by `rows` (see [`list_motion`]).
+    fn move_cursor(&mut self, rows: isize) {
+        match self.tab {
+            Tab::Search => self.results.move_by(rows),
+            Tab::Browse => self.browse_results.move_by(rows),
+            Tab::Transfers => self.transfers.move_by(rows),
+            Tab::Uploads => self.uploads.move_by(rows),
+            Tab::Buddies => self.buddies.move_by(rows),
+            Tab::Wishlist => self.wishlist.move_by(rows),
+            Tab::Chat => {
+                self.chats.move_by(rows);
+                self.chats.mark_selected_read();
+            }
+            Tab::Settings => self.settings.move_by(rows),
+        }
+    }
+
+    fn on_chat_key(&mut self, key: KeyEvent) {
         let c = &mut self.chats;
         match key.code {
-            KeyCode::Down | KeyCode::Char('j') => c.move_by(n),
-            KeyCode::Up | KeyCode::Char('k') => c.move_by(-n),
-            KeyCode::Home | KeyCode::Char('g') => c.selected = 0,
-            KeyCode::End | KeyCode::Char('G') => c.move_by(isize::MAX),
-            KeyCode::PageUp => c.scroll_pages(n),
-            KeyCode::PageDown => c.scroll_pages(-n),
+            KeyCode::PageUp => c.scroll_pages(1),
+            KeyCode::PageDown => c.scroll_pages(-1),
             KeyCode::Enter | KeyCode::Char('i') if c.selected().is_some() => {
-                c.input = Some(ChatInput::Message(String::new()))
+                c.input = Some(ChatInput::Message(TextInput::default()))
             }
-            KeyCode::Char('a') => c.input = Some(ChatInput::NewUser(String::new())),
+            KeyCode::Char('a') => c.input = Some(ChatInput::NewUser(TextInput::default())),
             KeyCode::Char('b') => {
                 if let Some(user) = c.selected().map(|c| c.username.clone()) {
                     self.start_browse(user);
@@ -776,22 +765,17 @@ impl App {
             KeyCode::Esc => self.chats.input = None,
             KeyCode::PageUp => self.chats.scroll_pages(1),
             KeyCode::PageDown => self.chats.scroll_pages(-1),
-            KeyCode::Backspace => {
-                text.pop();
-            }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => text.clear(),
-            KeyCode::Char(ch) => text.push(ch),
             KeyCode::Enter => match self.chats.input.take() {
                 Some(ChatInput::NewUser(user)) => {
-                    let user = user.trim().to_owned();
+                    let user = user.text().trim().to_owned();
                     if !user.is_empty() {
                         self.open_chat(&user);
                     }
                 }
                 Some(ChatInput::Message(message)) => {
                     // Stay in the box for the next line.
-                    self.chats.input = Some(ChatInput::Message(String::new()));
-                    let message = message.trim().to_owned();
+                    self.chats.input = Some(ChatInput::Message(TextInput::default()));
+                    let message = message.text().trim().to_owned();
                     let Some(user) = self.chats.selected().map(|c| c.username.clone()) else {
                         return;
                     };
@@ -805,22 +789,15 @@ impl App {
                 }
                 None => {}
             },
-            _ => {}
+            _ => {
+                text.on_key(key);
+            }
         }
     }
 
-    fn on_wishlist_key(&mut self, key: KeyEvent, count: Option<usize>) {
-        let n = count.unwrap_or(1) as isize;
-        let w = &mut self.wishlist;
+    fn on_wishlist_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Down | KeyCode::Char('j') => w.move_by(n),
-            KeyCode::Up | KeyCode::Char('k') => w.move_by(-n),
-            KeyCode::Home | KeyCode::Char('g') => w.selected = 0,
-            KeyCode::End | KeyCode::Char('G') => match count {
-                Some(line) => w.selected = (line - 1).min(w.items.len().saturating_sub(1)),
-                None => w.move_by(isize::MAX),
-            },
-            KeyCode::Char('a') => w.adding = Some(String::new()),
+            KeyCode::Char('a') => self.wishlist.adding = Some(TextInput::default()),
             KeyCode::Enter => self.open_wish(),
             KeyCode::Char('r') => {
                 if self.wishlist.selected < self.wishlist.items.len() {
@@ -848,17 +825,14 @@ impl App {
         };
         match key.code {
             KeyCode::Enter => {
-                let query = std::mem::take(text);
+                let query = text.take();
                 self.wishlist.adding = None;
                 self.add_wish(&query);
             }
             KeyCode::Esc => self.wishlist.adding = None,
-            KeyCode::Backspace => {
-                text.pop();
+            _ => {
+                text.on_key(key);
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => text.clear(),
-            KeyCode::Char(c) => text.push(c),
-            _ => {}
         }
     }
 
@@ -867,22 +841,10 @@ impl App {
         self.focus = Focus::Input;
     }
 
-    fn on_buddies_key(&mut self, key: KeyEvent, count: Option<usize>) {
-        let n = count.unwrap_or(1) as isize;
-        let page = self.page_size.max(1) as isize * n;
-        let b = &mut self.buddies;
+    fn on_buddies_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Down | KeyCode::Char('j') => b.move_by(n),
-            KeyCode::Up | KeyCode::Char('k') => b.move_by(-n),
-            KeyCode::PageDown => b.move_by(page),
-            KeyCode::PageUp => b.move_by(-page),
-            KeyCode::Home | KeyCode::Char('g') => b.selected = 0,
-            KeyCode::End | KeyCode::Char('G') => match count {
-                Some(line) => b.selected = (line - 1).min(b.list.len().saturating_sub(1)),
-                None => b.move_by(isize::MAX),
-            },
-            KeyCode::Char('a') => b.adding = Some(String::new()),
-            KeyCode::Char('x') => self.remove_selected_buddy(),
+            KeyCode::Char('a') => self.buddies.adding = Some(TextInput::default()),
+            KeyCode::Char('x') | KeyCode::Delete => self.remove_selected_buddy(),
             KeyCode::Enter | KeyCode::Char('b') => {
                 if let Some(user) = self.buddies.selected().map(|b| b.username.clone()) {
                     self.start_browse(user);
@@ -898,17 +860,14 @@ impl App {
         };
         match key.code {
             KeyCode::Enter => {
-                let name = std::mem::take(input);
+                let name = input.take();
                 self.buddies.adding = None;
                 self.add_buddy(&name);
             }
             KeyCode::Esc => self.buddies.adding = None,
-            KeyCode::Backspace => {
-                input.pop();
+            _ => {
+                input.on_key(key);
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => input.clear(),
-            KeyCode::Char(c) => input.push(c),
-            _ => {}
         }
     }
 
@@ -973,20 +932,8 @@ impl App {
         }
     }
 
-    fn on_uploads_key(&mut self, key: KeyEvent, count: Option<usize>) {
-        let n = count.unwrap_or(1) as isize;
-        let page = self.page_size.max(1) as isize * n;
-        let u = &mut self.uploads;
+    fn on_uploads_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Down | KeyCode::Char('j') => u.move_by(n),
-            KeyCode::Up | KeyCode::Char('k') => u.move_by(-n),
-            KeyCode::PageDown => u.move_by(page),
-            KeyCode::PageUp => u.move_by(-page),
-            KeyCode::Home | KeyCode::Char('g') => u.selected = 0,
-            KeyCode::End | KeyCode::Char('G') => match count {
-                Some(line) => u.selected = (line - 1).min(u.list.len().saturating_sub(1)),
-                None => u.move_by(isize::MAX),
-            },
             KeyCode::Char('c') => {
                 if let Some(u) = self.uploads.selected()
                     && !u.is_finished()
@@ -994,7 +941,17 @@ impl App {
                     let _ = self.client.cancel_upload(u.id);
                 }
             }
-            KeyCode::Char('x') => {
+            KeyCode::Char('x') | KeyCode::Delete => {
+                if let Some(u) = self.uploads.selected() {
+                    let (id, name) = (u.id, u.basename().to_owned());
+                    if !u.is_finished() {
+                        let _ = self.client.cancel_upload(id);
+                    }
+                    self.uploads.remove(id);
+                    self.status = format!("removed {name}");
+                }
+            }
+            KeyCode::Char('X') => {
                 let n = self.uploads.clear_finished();
                 let _ = self.client.clear_finished_uploads();
                 self.status = format!("cleared {n} finished uploads");
@@ -1022,41 +979,34 @@ impl App {
     fn on_input_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Enter => {
-                let query = self.input.trim().to_owned();
+                let query = self.input.text().trim().to_owned();
                 if !query.is_empty() {
+                    self.search_history.push(&query);
                     self.start_search(query);
                     self.focus = Focus::List;
                 }
             }
             KeyCode::Esc => self.focus = Focus::List,
-            KeyCode::Backspace => {
-                self.input.pop();
+            KeyCode::Up => self.search_history.older(&mut self.input),
+            KeyCode::Down => self.search_history.newer(&mut self.input),
+            _ => {
+                self.input.on_key(key);
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.input.clear()
-            }
-            KeyCode::Char(c) => self.input.push(c),
-            _ => {}
         }
     }
 
     fn on_browse_input_key(&mut self, key: KeyEvent) {
         match key.code {
             KeyCode::Enter => {
-                let user = self.browse_input.trim().to_owned();
+                let user = self.browse_input.text().trim().to_owned();
                 if !user.is_empty() {
                     self.start_browse(user);
                 }
             }
             KeyCode::Esc => self.browse_focus = Focus::List,
-            KeyCode::Backspace => {
-                self.browse_input.pop();
+            _ => {
+                self.browse_input.on_key(key);
             }
-            KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.browse_input.clear()
-            }
-            KeyCode::Char(c) => self.browse_input.push(c),
-            _ => {}
         }
     }
 
@@ -1064,7 +1014,7 @@ impl App {
     fn start_browse(&mut self, username: String) {
         self.tab = Tab::Browse;
         self.browse_focus = Focus::List;
-        self.browse_input = username.clone();
+        self.browse_input.set(username.clone());
         self.browse_results = Results::with_filter(self.browse_results.filter());
         self.browse_offset = 0;
         self.browse = Some(ActiveBrowse {
@@ -1104,10 +1054,12 @@ impl App {
         }
     }
 
-    fn on_results_key(&mut self, key: KeyEvent, count: Option<usize>, which: Which) {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let n = count.unwrap_or(1) as isize;
-        let page = self.page_size.max(1) as isize * n;
+    fn on_results_key(&mut self, key: KeyEvent, which: Which) {
+        if key.code == KeyCode::Char('b') && which == Which::Browse {
+            // Someone else's shares.
+            self.browse_focus = Focus::Input;
+            return;
+        }
         if key.code == KeyCode::Char('b') {
             // Browse the user of the selected row.
             if let Some((user, _)) = self.results_mut(which).selection_files().first() {
@@ -1130,17 +1082,7 @@ impl App {
         }
         let r = self.results_mut(which);
         match key.code {
-            KeyCode::Down | KeyCode::Char('j') => r.move_by(n),
-            KeyCode::Up | KeyCode::Char('k') => r.move_by(-n),
-            KeyCode::PageDown => r.move_by(page),
-            KeyCode::PageUp => r.move_by(-page),
-            KeyCode::Char('d') if ctrl => r.move_by(page / 2),
-            KeyCode::Char('u') if ctrl => r.move_by(-page / 2),
-            KeyCode::Home | KeyCode::Char('g') => r.move_to_start(),
-            KeyCode::End | KeyCode::Char('G') => match count {
-                Some(line) => r.move_to_index(line - 1),
-                None => r.move_to_end(),
-            },
+            KeyCode::Enter if r.file_selected() => self.download_selection(which),
             KeyCode::Enter | KeyCode::Char(' ') => r.toggle(),
             KeyCode::Right | KeyCode::Char('l') => r.expand(),
             KeyCode::Left | KeyCode::Char('h') => r.collapse(),
@@ -1182,20 +1124,8 @@ impl App {
         };
     }
 
-    fn on_transfers_key(&mut self, key: KeyEvent, count: Option<usize>) {
-        let n = count.unwrap_or(1) as isize;
-        let page = self.page_size.max(1) as isize * n;
-        let t = &mut self.transfers;
+    fn on_transfers_key(&mut self, key: KeyEvent) {
         match key.code {
-            KeyCode::Down | KeyCode::Char('j') => t.move_by(n),
-            KeyCode::Up | KeyCode::Char('k') => t.move_by(-n),
-            KeyCode::PageDown => t.move_by(page),
-            KeyCode::PageUp => t.move_by(-page),
-            KeyCode::Home | KeyCode::Char('g') => t.selected = 0,
-            KeyCode::End | KeyCode::Char('G') => match count {
-                Some(line) => t.selected = (line - 1).min(t.list.len().saturating_sub(1)),
-                None => t.move_by(isize::MAX),
-            },
             KeyCode::Char('c') => {
                 if let Some(t) = self.transfers.selected()
                     && !t.is_finished()
@@ -1219,13 +1149,42 @@ impl App {
                 }
                 _ => {}
             },
-            KeyCode::Char('x') => {
+            KeyCode::Char('x') | KeyCode::Delete => {
+                if let Some(t) = self.transfers.selected() {
+                    let (id, name) = (t.id, t.basename().to_owned());
+                    if !t.is_finished() {
+                        let _ = self.client.cancel_download(id);
+                    }
+                    self.transfers.remove(id);
+                    self.status = format!("removed {name}");
+                }
+            }
+            KeyCode::Char('X') => {
                 let n = self.transfers.clear_finished();
-                self.status = format!("cleared {n} finished transfers");
+                self.status = format!("cleared {n} finished downloads");
             }
             _ => {}
         }
     }
+}
+
+/// The cursor move `key` asks for in any list, in rows; `isize::MIN` and
+/// `isize::MAX` reach the first and the last row. `page` is the number of
+/// rows on screen.
+fn list_motion(key: KeyEvent, page: usize) -> Option<isize> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let page = page.max(1) as isize;
+    Some(match key.code {
+        KeyCode::Char('d') if ctrl => (page / 2).max(1),
+        KeyCode::Char('u') if ctrl => -(page / 2).max(1),
+        KeyCode::Down | KeyCode::Char('j') => 1,
+        KeyCode::Up | KeyCode::Char('k') => -1,
+        KeyCode::PageDown => page,
+        KeyCode::PageUp => -page,
+        KeyCode::Home | KeyCode::Char('g') => isize::MIN,
+        KeyCode::End | KeyCode::Char('G') => isize::MAX,
+        _ => return None,
+    })
 }
 
 /// A share list in the shape of a search response, so the Browse tab can

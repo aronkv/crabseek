@@ -30,9 +30,10 @@ fn page(tab: Tab) -> Page {
             keys: &[
                 (
                     "s or /",
-                    "type a search (Enter runs it, Esc back to the list)",
+                    "type a search (Enter runs it, ↑ / ↓ earlier searches, Esc back to the list)",
                 ),
-                ("Enter / Space", "open or close a folder"),
+                ("Enter", "open or close a folder; on a file, download it"),
+                ("Space, l / h", "open or close / open / close a folder"),
                 ("d", "download the file, or the whole folder"),
                 (
                     "f / F",
@@ -56,12 +57,19 @@ fn page(tab: Tab) -> Page {
                  partial data waits in .part files.",
             ],
             keys: &[
-                ("c", "cancel the selected download"),
+                (
+                    "c",
+                    "cancel the selected download (it stays, so r can retry it)",
+                ),
                 (
                     "r",
                     "retry a failed download, or ask again for a queued one's place",
                 ),
-                ("x", "clear finished downloads from the list"),
+                (
+                    "x",
+                    "remove the selected download, cancelling it if it runs",
+                ),
+                ("X", "clear all finished downloads"),
                 ("A", "add the uploader to your buddies"),
             ],
         },
@@ -76,7 +84,8 @@ fn page(tab: Tab) -> Page {
             ],
             keys: &[
                 ("c", "cancel the selected upload"),
-                ("x", "clear finished uploads from the list"),
+                ("x", "remove the selected upload, cancelling it if it runs"),
+                ("X", "clear all finished uploads"),
             ],
         },
         Tab::Settings => Page {
@@ -112,7 +121,7 @@ fn page(tab: Tab) -> Page {
                  arrive.",
             ],
             keys: &[
-                ("/", "type a username (Enter loads it)"),
+                ("b", "type another username (Enter loads it)"),
                 ("b on a search result", "browse that result's user"),
                 ("Enter / d / f", "open a folder / download / format filter"),
             ],
@@ -182,11 +191,12 @@ fn page(tab: Tab) -> Page {
 }
 
 const GENERAL: &[(&str, &str)] = &[
-    ("Tab / Shift-Tab, Alt-1…8, F1…F8", "switch tabs"),
+    ("1…8, Tab / Shift-Tab, F1…F8", "switch tabs"),
+    ("j / k, ↓ / ↑", "move"),
+    ("g / G, Home / End", "first / last row"),
+    ("PgUp / PgDn, Ctrl-d / Ctrl-u", "a page / half a page"),
     ("m", "write a private message to the selected row's user"),
-    ("j / k, ↓ / ↑, PgUp / PgDn, g / G", "move"),
-    ("10j, 10k, 5G", "vim counts: move 10 rows, jump to row 5"),
-    ("Alt-s", "jump to the search box from anywhere"),
+    ("Alt-s", "jump to the search box from anywhere, or back"),
     (
         "?",
         "this help (j / k or PgUp / PgDn scroll, Esc or ? closes)",
@@ -196,6 +206,18 @@ const GENERAL: &[(&str, &str)] = &[
         "quit (asks again while transfers run); in background mode: detach",
     ),
     ("Q", "quit, also in background mode"),
+];
+
+const TEXT: &[(&str, &str)] = &[
+    ("← / →, Ctrl-← / Ctrl-→", "move by character / by word"),
+    ("Home / End, Ctrl-a / Ctrl-e", "start / end"),
+    (
+        "Ctrl-Backspace, Alt-Backspace, Ctrl-w",
+        "delete the word before the cursor",
+    ),
+    ("Ctrl-Delete, Alt-d", "delete the word after the cursor"),
+    ("Ctrl-u / Ctrl-k", "delete to the start / to the end"),
+    ("Enter / Esc", "confirm / leave the box"),
 ];
 
 fn key_lines(keys: &[(&str, &str)]) -> Vec<Line<'static>> {
@@ -228,6 +250,9 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     lines.push(Line::default());
     lines.push(Line::from("Everywhere").bold());
     lines.extend(key_lines(GENERAL));
+    lines.push(Line::default());
+    lines.push(Line::from("In text boxes").bold());
+    lines.extend(key_lines(TEXT));
 
     let screen = frame.area();
     let width = WIDTH.min(screen.width);

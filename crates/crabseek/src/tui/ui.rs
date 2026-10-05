@@ -12,6 +12,7 @@ use ratatui::widgets::{Block, Cell, Paragraph, Row as TableRow, Table, TableStat
 use super::app::{App, Focus, SharesStatus, Tab};
 use super::buddies::Known;
 use super::chat::ChatInput;
+use super::input::TextInput;
 use super::results::{FormatFilter, Results, Row};
 use super::settings::Item;
 use crate::config::{self, display_path};
@@ -59,11 +60,7 @@ pub fn render(frame: &mut Frame, app: &mut App) {
         ),
         status,
     );
-    let mut help_spans = Vec::new();
-    if let Some(count) = app.count {
-        help_spans.push(Span::raw(format!(" {count} ")).black().on_yellow());
-    }
-    help_spans.push(Span::raw(" ? help ·").cyan());
+    let mut help_spans = vec![Span::raw(" ? help ·").cyan()];
     let line = if app.background {
         help_line(app).replace("q quit", "q detach · Q stop")
     } else {
@@ -863,10 +860,11 @@ fn render_chat(frame: &mut Frame, app: &mut App, area: Rect) {
         Some(_) => frame.render_widget(Paragraph::new(lines), inner),
     }
 
+    let empty = TextInput::default();
     let (label, text) = match &chats.input {
-        Some(ChatInput::Message(t)) => (" Message ", t.as_str()),
-        Some(ChatInput::NewUser(t)) => (" Write to user ", t.as_str()),
-        None => (" Enter or i to write ", ""),
+        Some(ChatInput::Message(t)) => (" Message ", t),
+        Some(ChatInput::NewUser(t)) => (" Write to user ", t),
+        None => (" Enter or i to write ", &empty),
     };
     let block = Block::bordered()
         .title(label)
@@ -1089,34 +1087,34 @@ fn render_buddies(frame: &mut Frame, app: &mut App, area: Rect) {
 fn help_line(app: &App) -> &'static str {
     match (app.tab, app.focus) {
         (Tab::Search, Focus::Input) => {
-            " Ctrl-c quit · Enter search · Esc/Alt-s results · Ctrl-u clear"
+            " Ctrl-c quit · Enter search · ↑/↓ earlier searches · Esc results · Ctrl-Backspace delete word"
         }
         (Tab::Search, Focus::List) => {
-            " q quit · Tab/Alt-1…8 tabs · 10j/10k jump · j/k move · Enter open folder · h/l collapse/expand · d download · w wishlist · b browse user · A add buddy · f/F format filter · s search"
+            " q quit · 1-8 tabs · j/k move · Enter open/download · d download · w wishlist · b browse user · A add buddy · f/F format filter · s search"
         }
         (Tab::Transfers, _) => {
-            " q quit · Tab/Alt-1…8 tabs · j/k move · c cancel · r retry / queue place · x clear finished · A add buddy · s search"
+            " q quit · 1-8 tabs · j/k move · c cancel · r retry / queue place · x remove · X clear finished · A add buddy · s search"
         }
         (Tab::Browse, _) if app.browse_focus == Focus::Input => {
             " Ctrl-c quit · Enter browse user · Esc list · Ctrl-u clear"
         }
         (Tab::Browse, _) => {
-            " q quit · Tab/Alt-1…8 tabs · j/k move · Enter open folder · d download · A add buddy · f/F format filter · / other user"
+            " q quit · 1-8 tabs · j/k move · Enter open/download · d download · b other user · A add buddy · f/F format filter"
         }
         (Tab::Uploads, _) => {
-            " q quit · Tab/Alt-1…8 tabs · j/k move · c cancel · x clear finished · A add buddy · s search"
+            " q quit · 1-8 tabs · j/k move · c cancel · x remove · X clear finished · A add buddy · s search"
         }
         (Tab::Settings, _) if app.settings.is_editing() => {
             " Tab complete folder · Enter save · Esc cancel · Ctrl-u clear"
         }
         (Tab::Settings, _) => {
-            " q quit · Tab/Alt-1…8 tabs · j/k move · Enter edit/toggle · a add shared folder · x remove · s search"
+            " q quit · 1-8 tabs · j/k move · Enter edit/toggle · a add shared folder · x remove · s search"
         }
         (Tab::Buddies, _) if app.buddies.adding.is_some() => {
             " Ctrl-c quit · Enter add buddy · Esc cancel · Ctrl-u clear"
         }
         (Tab::Buddies, _) => {
-            " q quit · Tab/Alt-1…8 tabs · j/k move · a add buddy · x remove · Enter/b browse shares · s search"
+            " q quit · 1-8 tabs · j/k move · a add buddy · x remove · Enter/b browse shares · s search"
         }
         (Tab::Chat, _) if matches!(app.chats.input, Some(ChatInput::NewUser(_))) => {
             " Ctrl-c quit · Enter open conversation · Esc cancel · Ctrl-u clear"
@@ -1125,13 +1123,13 @@ fn help_line(app: &App) -> &'static str {
             " Ctrl-c quit · Enter send · Esc stop typing · Ctrl-u clear"
         }
         (Tab::Chat, _) => {
-            " q quit · Tab/Alt-1…8 tabs · j/k conversation · PgUp/PgDn scroll · Enter/i write · a new conversation · b browse · x delete · m on other tabs"
+            " q quit · 1-8 tabs · j/k conversation · PgUp/PgDn scroll · Enter/i write · a new conversation · b browse · x delete · m on other tabs"
         }
         (Tab::Wishlist, _) if app.wishlist.adding.is_some() => {
             " Ctrl-c quit · Enter add to wishlist · Esc cancel · Ctrl-u clear"
         }
         (Tab::Wishlist, _) => {
-            " q quit · Tab/Alt-1…8 tabs · j/k move · Enter open results · a add · r run now · x remove · w on a search adds it"
+            " q quit · 1-8 tabs · j/k move · Enter open results · a add · r run now · x remove · w on a search adds it"
         }
     }
 }
@@ -1152,10 +1150,13 @@ fn render_settings(frame: &mut Frame, app: &mut App, area: Rect) {
         let marker = if selected { "› " } else { "  " };
         match editing.filter(|e| e.item == item) {
             Some(edit) => {
-                cursor = Some((lines.len(), marker.width() + edit.text.width()));
+                cursor = Some((
+                    lines.len(),
+                    marker.width() + edit.text.before_cursor().width(),
+                ));
                 lines.push(Line::from(vec![
                     Span::raw(marker),
-                    Span::raw(edit.text.clone()).reversed(),
+                    Span::raw(edit.text.text().to_owned()).reversed(),
                 ]));
             }
             None if selected && editing.is_none() => lines.push(Line::from(vec![
@@ -1339,15 +1340,46 @@ fn progress_bar(received: u64, size: u64, width: usize) -> Line<'static> {
 
 /// A one-line bordered text box. With `cursor`, the cursor sits after the
 /// text; text too wide for the box scrolls so its end stays in view.
-fn render_input(frame: &mut Frame, area: Rect, block: Block, text: &str, cursor: bool) {
+fn render_input(frame: &mut Frame, area: Rect, block: Block, input: &TextInput, cursor: bool) {
     let inner = block.inner(area);
-    // One column stays free for the cursor.
-    let shown = ellipsis_start(text, usize::from(inner.width.saturating_sub(1)));
-    let x = inner.x + shown.width() as u16;
+    let (shown, x) = input_view(input, usize::from(inner.width));
     frame.render_widget(Paragraph::new(shown).block(block), area);
     if cursor {
-        frame.set_cursor_position(Position::new(x, inner.y));
+        frame.set_cursor_position(Position::new(inner.x + x as u16, inner.y));
     }
+}
+
+/// The part of `input` that fits in `width` columns and the cursor's
+/// column in it. The view scrolls only as far as needed to keep the cursor
+/// inside, which needs a column of its own at the end of the text.
+fn input_view(input: &TextInput, width: usize) -> (String, usize) {
+    use unicode_width::UnicodeWidthChar;
+    let col = input.before_cursor().width();
+    let max_scroll = (input.text().width() + 1).saturating_sub(width);
+    let mut scroll = input.scroll.get().min(max_scroll);
+    if col < scroll {
+        scroll = col;
+    } else if col + 1 > scroll + width {
+        scroll = (col + 1).saturating_sub(width);
+    }
+    input.scroll.set(scroll);
+
+    let mut shown = String::new();
+    let mut at = 0;
+    for c in input.text().chars() {
+        let w = c.width().unwrap_or(0);
+        if at + w > scroll + width {
+            break;
+        }
+        if at >= scroll {
+            shown.push(c);
+        } else if at + w > scroll {
+            // A wide character cut by the left edge.
+            shown.extend(std::iter::repeat_n(' ', at + w - scroll));
+        }
+        at += w;
+    }
+    (shown, col - scroll)
 }
 
 /// Cuts `s` to `width` display columns, ending in `…` when it had to cut.

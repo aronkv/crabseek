@@ -52,7 +52,9 @@ you type `crabseek`, search, and download whole albums in a few keystrokes.
 - **Quality at a glance:** kbps for every file and folder (estimated from size and
   length, marked `~`, when the peer does not send it), plus sample rate and bit depth
   for lossless files, duration and size.
-- **Vim-style navigation:** `j`/`k`, counts like `10k` or `5G`, `g`/`G`.
+- **Vim-style navigation:** `j`/`k`, `g`/`G`, `Ctrl-d`/`Ctrl-u` in every list, and
+  `1`–`8` for the tabs. Text boxes edit like a shell: arrows, `Ctrl-Backspace` deletes a
+  word, `↑`/`↓` recall earlier searches.
 - **Automatic port forwarding:** UPnP opens the listen port on the router, with a
   warning when another NAT sits in front of it.
 - **Solid networking:** direct and firewall-piercing (indirect) peer connections are
@@ -168,28 +170,36 @@ Without this, you can still download from peers that are reachable themselves.
 | everywhere | `s`, `/` | open the search box (crabseek starts in the results list) |
 | | `?` | explain the current tab: what it is for, how it works, its keys (`j`/`k`, `PgUp`/`PgDn` scroll) |
 | | `Alt-s` | toggle between the search box and the results, also while typing |
-| | `Tab`, `Alt-1`–`8`, `F1`–`F8` | switch between Search, Downloads, Uploads, Browse, Chat, Buddies, Wishlist and Settings |
+| | `1` to `8`, `Tab`, `F1` to `F8` | switch between Search, Downloads, Uploads, Browse, Chat, Buddies, Wishlist and Settings |
 | | `m` | write a private message to the user of the selected row |
 | | `A` | add the user of the selected result, download or upload as a buddy |
 | | `q`, `Ctrl-c` | quit (`q` asks again while transfers are running) |
-| lists | `10j`, `10k`, `10↑` … | vim-style counts: move 10 rows (the count shows bottom left) |
-| | `5G` | jump to row 5 |
+| every list | `j`/`k`, `↓`/`↑` | move |
+| | `g`/`G`, `Home`/`End` | first or last row |
+| | `PgUp`/`PgDn`, `Ctrl-d`/`Ctrl-u` | a page or half a page |
+| text boxes | `←`/`→`, `Ctrl-←`/`Ctrl-→` | move by character or by word |
+| | `Home`/`End`, `Ctrl-a`/`Ctrl-e` | start or end |
+| | `Ctrl-Backspace`, `Alt-Backspace`, `Ctrl-w` | delete the word before the cursor |
+| | `Ctrl-Delete`, `Alt-d` | delete the word after the cursor |
+| | `Ctrl-u` / `Ctrl-k` | delete to the start or to the end |
 | search box | `Enter` | search |
+| | `↑`/`↓` | earlier searches |
 | | `Esc`, `Alt-s` | back to the results |
-| | `Ctrl-u` | clear |
-| results | `j`/`k`, `↓`/`↑`, `PgUp`/`PgDn`, `g`/`G` | move |
-| | `Enter`, `Space` | open or close a folder |
+| results | `Enter` | open or close a folder; on a file, download it |
+| | `Space` | open or close a folder |
 | | `l`/`h` | expand or collapse |
 | | `d` | download the file or the whole folder |
 | | `b` | browse all shares of that result's user |
 | | `f` / `F` | next or previous format filter |
-| browse | `/` | type a username (`Enter` loads it); the tab starts on the list |
+| browse | `b` | type another username (`Enter` loads it); the tab starts on the list |
 | | same keys as results | open folders, filter, `d` download |
-| downloads | `c` | cancel |
+| downloads | `c` | cancel (the row stays, so `r` can retry it) |
 | | `r` | retry a failed download, or ask again for a queued one's place |
-| | `x` | clear finished downloads |
+| | `x` | remove the selected download, cancelling it if it runs |
+| | `X` | clear all finished downloads |
 | uploads | `c` | cancel |
-| | `x` | clear finished uploads |
+| | `x` | remove the selected upload, cancelling it if it runs |
+| | `X` | clear all finished uploads |
 | settings | `Enter` | edit the selected folder or port (`Tab` completes paths), toggle UPnP or notifications |
 | | `a` / `x` | add or remove a shared folder |
 | buddies | `a` | type a username to add (`Enter` adds it) |
