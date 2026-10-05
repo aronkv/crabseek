@@ -7,6 +7,7 @@
 **A fast, keyboard-driven [Soulseek](https://www.slsknet.org/) client for the terminal, written in Rust.**
 
 [![CI](https://github.com/aronkv/crabseek/actions/workflows/ci.yml/badge.svg)](https://github.com/aronkv/crabseek/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/aronkv/crabseek/graph/badge.svg)](https://codecov.io/gh/aronkv/crabseek)
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Rust 1.88+](https://img.shields.io/badge/rust-1.88%2B-orange.svg)
 
