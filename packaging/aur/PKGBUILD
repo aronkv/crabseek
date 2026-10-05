@@ -3,7 +3,7 @@
 # To release: tag vX.Y.Z on GitHub, set pkgver, `updpkgsums`,
 # `makepkg --printsrcinfo > .SRCINFO`, push both to the AUR repo.
 pkgname=crabseek
-pkgver=0.1.1
+pkgver=0.2.0
 pkgrel=1
 pkgdesc="A fast Soulseek client for the terminal"
 arch=('x86_64' 'aarch64')
@@ -12,7 +12,7 @@ license=('MIT')
 depends=('libgcc' 'glibc')
 makedepends=('cargo')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('7a51f2caa4d6ef67796a3c43da663b7d91460fcc5a3aa9ea62d7ed9a713d0c44')
+sha256sums=('f214277fe2d75a842cc3b171931bc36e412ec6b2ad9a0ff2235df543fa4e5c38')
 
 prepare() {
     cd "$pkgname-$pkgver"
