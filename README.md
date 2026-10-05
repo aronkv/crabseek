@@ -33,8 +33,8 @@ you type `crabseek`, search, and download whole albums in a few keystrokes.
   were offline arrive when you log in. The history is kept between runs.
 - **Background mode (optional):** `q` closes the window but crabseek keeps sharing,
   downloading and searching; `crabseek` brings it back, like tmux. Off by default.
-- **Desktop notifications (optional):** finished downloads (an album is one
-  notification, not twenty), private messages and new wishlist results. Off by
+- **Desktop notifications (optional):** finished downloads (one notification
+  per album), private messages and new wishlist results. Off by
   default; turn them on in Settings.
 - **Built-in help:** `?` on any tab explains what it is for and lists its keys.
 - **Wishlist:** saved searches keep running in the background, one every 12
@@ -57,7 +57,7 @@ you type `crabseek`, search, and download whole albums in a few keystrokes.
   word, `↑`/`↓` recall earlier searches.
 - **Automatic port forwarding:** UPnP opens the listen port on the router, with a
   warning when another NAT sits in front of it.
-- **Solid networking:** direct and firewall-piercing (indirect) peer connections are
+- **NAT traversal:** direct and firewall-piercing (indirect) peer connections are
   raced against each other, so peers behind NAT still work. Peers behind your own
   router are reached locally.
 - **Scriptable CLI:** `crabseek search`, `crabseek download` and friends for quick checks
@@ -109,7 +109,7 @@ This removes crabseek completely:
 | share cache | `~/.cache/crabseek/` |
 | logs | `~/.local/state/crabseek/` |
 
-Your downloaded music is **never** touched. The saved Soulseek password is deleted
+Your downloaded music is never touched. The saved Soulseek password is deleted
 too, and Soulseek has no password reset, so keep a note of it if you want to use the
 account again. If you installed with `cargo install`, use `cargo uninstall crabseek` for
 the binary and the script for the rest.
@@ -151,9 +151,9 @@ login would push the background one off the server.
 ### Let peers reach you
 
 Soulseek is peer-to-peer. Downloads and sharing work best when other users can connect
-to you on your listen port (TCP **2234** by default):
+to you on your listen port (TCP 2234 by default):
 
-- **Router:** crabseek opens the port by itself with **UPnP** when the router supports
+- **Router:** crabseek opens the port by itself with UPnP when the router supports
   it, and renews it every 30 minutes. The Settings tab shows the result; check it any
   time with `crabseek portmap`. Without UPnP, forward TCP 2234 to your computer by hand.
 - **Double NAT:** if Settings says the router "sits behind another NAT", your ISP's
