@@ -577,7 +577,7 @@ fn render_browse(frame: &mut Frame, app: &mut App, area: Rect) {
     let (title, empty) = match &app.browse {
         None => (
             format!(" Shares{} ", filter_note(&mut app.browse_results)),
-            "See everything one user shares. Press / to type a username, or b on a search \
+            "See everything one user shares. Press b to type a username, or b on a search \
              result. ? explains more."
                 .to_owned(),
         ),

@@ -1236,4 +1236,20 @@ mod tests {
         assert!(app.status.contains("wishlist"), "{}", app.status);
         assert_eq!(status_fg(&mut app), Color::Yellow);
     }
+
+    #[test]
+    fn browse_hint_names_the_key_that_opens_the_box() {
+        let mut app = App::new(
+            Client::offline(),
+            "me".into(),
+            &Config::default(),
+            vec![],
+            None,
+        )
+        .unwrap();
+        app.on_key(KeyEvent::from(KeyCode::Char('4')));
+        assert!(draw(&mut app).contains("Press b to type a username"));
+        app.on_key(KeyEvent::from(KeyCode::Char('b')));
+        assert_eq!(app.browse_focus, Focus::Input);
+    }
 }
