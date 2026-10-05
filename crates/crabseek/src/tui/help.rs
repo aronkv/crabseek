@@ -50,13 +50,17 @@ fn page(tab: Tab) -> Page {
             title: "Downloads",
             about: &[
                 "Everything you queued for download. Uploaders send files when a slot frees \
-                 up, so 'queued #n' is your place in their queue.",
+                 up, so 'queued #n' is your place in their queue. It is asked again every \
+                 5 minutes, or with r.",
                 "Unfinished downloads survive a restart and continue where they stopped; the \
                  partial data waits in .part files.",
             ],
             keys: &[
                 ("c", "cancel the selected download"),
-                ("r", "retry a failed download"),
+                (
+                    "r",
+                    "retry a failed download, or ask again for a queued one's place",
+                ),
                 ("x", "clear finished downloads from the list"),
                 ("A", "add the uploader to your buddies"),
             ],

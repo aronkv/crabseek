@@ -186,7 +186,7 @@ Without this, you can still download from peers that are reachable themselves.
 | browse | `/` | type a username (`Enter` loads it); the tab starts on the list |
 | | same keys as results | open folders, filter, `d` download |
 | downloads | `c` | cancel |
-| | `r` | retry a failed download |
+| | `r` | retry a failed download, or ask again for a queued one's place |
 | | `x` | clear finished downloads |
 | uploads | `c` | cancel |
 | | `x` | clear finished uploads |

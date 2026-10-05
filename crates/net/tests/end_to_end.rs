@@ -12,7 +12,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::{BufMut, BytesMut};
-use crabseek_net::{Client, ClientConfig, ConnectMethod, DownloadState, Event, UploadState};
+use crabseek_net::{
+    Client, ClientConfig, ConnectMethod, DownloadId, DownloadState, Event, UploadState, connect,
+};
+use crabseek_proto::peer::PeerMsg;
+use crabseek_proto::peer_init::PeerInitMsg;
 use crabseek_proto::wire::{Reader, WireWrite};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -266,6 +270,10 @@ async fn serve(stream: TcpStream, sessions: Sessions, watchers: Watchers, opts: 
                             b.put_u32_le(0);
                         }))
                         .unwrap();
+                } else {
+                    // Nobody to relay to; say so at once rather than leave
+                    // the client waiting for its pending timeout.
+                    tx.send(frame(1001, |b| b.put_u32_le(token))).unwrap();
                 }
             }
             // FileSearch and WishlistSearch: hand them to the distributed
@@ -833,5 +841,151 @@ async fn indirect_request_burst_is_capped() {
         count >= BURST - CAP,
         "only {count} of {BURST} declined quickly; the rest are holding sockets"
     );
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+/// Reads one peer message from a raw `P` connection.
+async fn read_peer_msg(stream: &mut TcpStream) -> PeerMsg {
+    let len = stream.read_u32_le().await.unwrap();
+    let mut payload = vec![0; len as usize];
+    stream.read_exact(&mut payload).await.unwrap();
+    PeerMsg::decode(payload.into()).unwrap()
+}
+
+/// Accepts Bob's next `P` connection and answers his PlaceInQueueRequest
+/// with `place`. Returns the connection and what else he sent before
+/// asking.
+async fn answer_place(
+    listener: &TcpListener,
+    remote: &str,
+    place: u32,
+) -> (TcpStream, Vec<PeerMsg>) {
+    let (mut stream, _) = listener.accept().await.unwrap();
+    let init = connect::read_init(&mut stream).await.unwrap();
+    assert!(matches!(init, PeerInitMsg::PeerInit { username, .. } if username == "bob"));
+    let mut before = Vec::new();
+    loop {
+        match read_peer_msg(&mut stream).await {
+            PeerMsg::PlaceInQueueRequest { filename } => {
+                assert_eq!(filename, remote);
+                break;
+            }
+            other => before.push(other),
+        }
+    }
+    let mut out = BytesMut::new();
+    PeerMsg::PlaceInQueueResponse {
+        filename: remote.to_owned(),
+        place,
+    }
+    .encode(&mut out);
+    stream.write_all(&out).await.unwrap();
+    (stream, before)
+}
+
+async fn queue_place(events: &mut mpsc::UnboundedReceiver<Event>, id: DownloadId) -> u32 {
+    wait_for(events, |e| match e {
+        Event::Download {
+            id: got,
+            state: DownloadState::Queued { place: Some(p) },
+            ..
+        } if got == id => Some(p),
+        _ => None,
+    })
+    .await
+}
+
+/// Closes Carol's side, as an uploader does with idle connections, and
+/// waits until Bob notices.
+async fn hang_up(stream: TcpStream, events: &mut mpsc::UnboundedReceiver<Event>) {
+    drop(stream);
+    wait_for(events, |e| match e {
+        Event::PeerDisconnected { username, .. } if username == "carol" => Some(()),
+        _ => None,
+    })
+    .await;
+}
+
+/// Queue places go stale as the uploader's queue moves, so Bob asks again.
+/// An uploader that cannot be reached for that must not fail a download
+/// it already has in its queue.
+#[tokio::test]
+async fn queue_place_is_asked_again() {
+    let root = temp_dir("place");
+    let remote = "Music\\Album\\01 - Song.flac";
+    let server = fake_server(&[]).await;
+
+    // Carol is a bare socket that keeps Bob queued.
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut carol = TcpStream::connect(&server).await.unwrap();
+    carol
+        .write_all(&frame(1, |b| b.put_string_wire("carol")))
+        .await
+        .unwrap();
+    carol
+        .write_all(&frame(2, |b| b.put_u32_le(port.into())))
+        .await
+        .unwrap();
+    // Our own address comes back only after the server took the port.
+    carol
+        .write_all(&frame(3, |b| b.put_string_wire("carol")))
+        .await
+        .unwrap();
+    loop {
+        let len = carol.read_u32_le().await.unwrap();
+        let mut payload = vec![0; len as usize];
+        carol.read_exact(&mut payload).await.unwrap();
+        if Reader::new(&payload).u32().unwrap() == 3 {
+            break;
+        }
+    }
+
+    let (bob, mut bob_events) = start(&server, "bob", &root.join("b"), vec![]).await;
+    let id = bob.download("carol", remote).unwrap();
+
+    let (stream, before) = answer_place(&listener, remote, 5).await;
+    assert!(matches!(&before[..], [PeerMsg::QueueUpload { filename }] if filename == remote));
+    assert_eq!(queue_place(&mut bob_events, id).await, 5);
+    hang_up(stream, &mut bob_events).await;
+
+    bob.ask_queue_place(id).unwrap();
+    let (stream, before) = answer_place(&listener, remote, 2).await;
+    assert!(before.is_empty(), "queued twice: {before:?}");
+    assert_eq!(queue_place(&mut bob_events, id).await, 2);
+    hang_up(stream, &mut bob_events).await;
+
+    // Carol logs off.
+    drop(listener);
+    drop(carol);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    bob.ask_queue_place(id).unwrap();
+    wait_for(&mut bob_events, |e| match e {
+        Event::PeerConnectFailed { username, .. } if username == "carol" => Some(()),
+        Event::Download {
+            state: DownloadState::Failed { reason },
+            ..
+        } => panic!("queued download failed: {reason}"),
+        _ => None,
+    })
+    .await;
+
+    // A download whose QueueUpload never got out does fail.
+    let unsent = bob
+        .download("carol", "Music\\Album\\02 - Other.flac")
+        .unwrap();
+    let reason = wait_for(&mut bob_events, |e| match e {
+        Event::Download {
+            id: got,
+            state: DownloadState::Failed { reason },
+            ..
+        } => {
+            assert_eq!(got, unsent, "queued download failed: {reason}");
+            Some(reason)
+        }
+        _ => None,
+    })
+    .await;
+    assert!(reason.starts_with("could not reach user"), "{reason}");
     std::fs::remove_dir_all(root).unwrap();
 }

@@ -57,6 +57,10 @@ const MAX_SEARCHES_IN_FLIGHT: usize = 16;
 /// The spec allows at most one `ServerPing` a minute.
 const PING_INTERVAL: Duration = Duration::from_secs(60);
 
+/// How often queued downloads ask the uploader for their place again
+/// (Nicotine+ uses the same). Each ask may open a connection per uploader.
+const QUEUE_PLACE_INTERVAL: Duration = Duration::from_secs(300);
+
 #[derive(Debug, Clone)]
 pub struct ClientConfig {
     pub server: String,
@@ -215,16 +219,9 @@ impl Client {
 
         tokio::spawn(read_server(server_reader, tx.clone()));
         let accept_task = tokio::spawn(accept_loop(listener, tx.clone())).abort_handle();
-        let ping_tx = tx.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(PING_INTERVAL);
-            interval.tick().await; // the first tick is immediate
-            loop {
-                interval.tick().await;
-                if ping_tx.send(Internal::Ping).is_err() {
-                    return;
-                }
-            }
+        every(PING_INTERVAL, tx.clone(), || Internal::Ping);
+        every(QUEUE_PLACE_INTERVAL, tx.clone(), || {
+            Internal::AskQueuePlaces { only: None }
         });
         tokio::spawn(
             Actor {
@@ -396,6 +393,15 @@ impl Client {
             .map_err(|_| ShutDown)
     }
 
+    /// Asks the uploader again for our place in its queue. The answer
+    /// arrives as [`Event::Download`] with [`DownloadState::Queued`].
+    /// Queued downloads also do this on their own every few minutes.
+    pub fn ask_queue_place(&self, id: DownloadId) -> Result<(), ShutDown> {
+        self.tx
+            .send(Internal::AskQueuePlaces { only: Some(id) })
+            .map_err(|_| ShutDown)
+    }
+
     pub fn cancel_download(&self, id: DownloadId) -> Result<(), ShutDown> {
         self.tx
             .send(Internal::CancelDownload { id })
@@ -484,6 +490,10 @@ pub(crate) enum Internal {
     },
     CancelDownload {
         id: DownloadId,
+    },
+    /// For one download, or for every one still waiting in a queue.
+    AskQueuePlaces {
+        only: Option<DownloadId>,
     },
     SetDownloadDir(PathBuf),
     SetListenPort(u16),
@@ -669,6 +679,7 @@ impl Actor {
                     filename,
                 } => self.start_download(id, username, filename).await,
                 Internal::CancelDownload { id } => self.cancel_download(id),
+                Internal::AskQueuePlaces { only } => self.ask_queue_places(only).await,
                 Internal::SetDownloadDir(dir) => self.download_dir = dir,
                 Internal::SetListenPort(port) => self.set_listen_port(port).await,
                 Internal::SetUpnp(enabled) => self.set_upnp(enabled),
@@ -1133,8 +1144,8 @@ impl Actor {
         };
         match p.purpose {
             Purpose::Peer => {
-                self.outbox.remove(&p.username);
-                self.fail_queued_downloads(&p.username, &reason);
+                let unsent = self.outbox.remove(&p.username).unwrap_or_default();
+                self.fail_unsent_downloads(&p.username, &unsent, &reason);
             }
             Purpose::Upload(id) => {
                 let _ = self.internal.send(Internal::UploadConnectFailed {
@@ -1166,6 +1177,21 @@ impl Actor {
             upload_permitted: Some(0),
         }
     }
+}
+
+/// Sends `msg()` to the actor every `period`, the first one `period` from
+/// now, until the actor is gone.
+fn every(period: Duration, tx: mpsc::UnboundedSender<Internal>, msg: fn() -> Internal) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(period);
+        interval.tick().await; // the first tick is immediate
+        loop {
+            interval.tick().await;
+            if tx.send(msg()).is_err() {
+                return;
+            }
+        }
+    });
 }
 
 async fn read_server(mut reader: ServerReader, tx: mpsc::UnboundedSender<Internal>) {

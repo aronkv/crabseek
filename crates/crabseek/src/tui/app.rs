@@ -1203,17 +1203,22 @@ impl App {
                     let _ = self.client.cancel_download(t.id);
                 }
             }
-            KeyCode::Char('r') => {
-                if let Some(t) = self.transfers.selected()
-                    && matches!(t.state, DownloadState::Failed { .. })
-                {
+            KeyCode::Char('r') => match self.transfers.selected() {
+                Some(t) if matches!(t.state, DownloadState::Failed { .. }) => {
                     let (id, user, file) = (t.id, t.username.clone(), t.filename.clone());
                     if self.client.download(user, file).is_ok() {
                         self.transfers.remove(id);
                         self.status = "retrying".to_owned();
                     }
                 }
-            }
+                Some(t)
+                    if matches!(t.state, DownloadState::Queued { .. })
+                        && self.client.ask_queue_place(t.id).is_ok() =>
+                {
+                    self.status = format!("asking {} for the queue place", t.username);
+                }
+                _ => {}
+            },
             KeyCode::Char('x') => {
                 let n = self.transfers.clear_finished();
                 self.status = format!("cleared {n} finished transfers");

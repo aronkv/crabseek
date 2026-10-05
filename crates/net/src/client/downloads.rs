@@ -52,6 +52,13 @@ pub(super) struct Download {
     task: Option<AbortHandle>,
 }
 
+impl Download {
+    /// Still in the uploader's queue: it has not offered the file yet.
+    fn is_waiting(&self) -> bool {
+        matches!(self.state, DownloadState::Queued { .. }) && self.transfer.is_none()
+    }
+}
+
 impl Actor {
     pub(super) async fn start_download(
         &mut self,
@@ -79,6 +86,22 @@ impl Actor {
         .await;
         self.send_peer(username, PeerMsg::PlaceInQueueRequest { filename })
             .await;
+    }
+
+    /// Asks the uploaders again for our place in their queues, for `only`
+    /// or for every waiting download. The place changes as their queue
+    /// moves, and they tell it only when asked.
+    pub(super) async fn ask_queue_places(&mut self, only: Option<DownloadId>) {
+        let asks: Vec<_> = self
+            .downloads
+            .iter()
+            .filter(|(id, d)| only.is_none_or(|only| only == **id) && d.is_waiting())
+            .map(|(_, d)| (d.username.clone(), d.filename.clone()))
+            .collect();
+        for (username, filename) in asks {
+            self.send_peer(username, PeerMsg::PlaceInQueueRequest { filename })
+                .await;
+        }
     }
 
     pub(super) fn cancel_download(&mut self, id: DownloadId) {
@@ -288,13 +311,25 @@ impl Actor {
         }
     }
 
-    /// The `P` connection needed to queue these downloads failed.
-    pub(super) fn fail_queued_downloads(&mut self, username: &str, reason: &str) {
+    /// The `P` connection that was to carry `unsent` failed. Downloads
+    /// whose `QueueUpload` is among them never reached the uploader; the
+    /// others are in its queue already and stay queued, since it connects
+    /// to us when their turn comes.
+    pub(super) fn fail_unsent_downloads(
+        &mut self,
+        username: &str,
+        unsent: &[PeerMsg],
+        reason: &str,
+    ) {
         let ids: Vec<_> = self
             .downloads
             .iter()
             .filter(|(_, d)| {
-                d.username == username && d.transfer.is_none() && !d.state.is_finished()
+                d.username == username
+                    && d.is_waiting()
+                    && unsent.iter().any(|m| {
+                        matches!(m, PeerMsg::QueueUpload { filename } if *filename == d.filename)
+                    })
             })
             .map(|(id, _)| *id)
             .collect();

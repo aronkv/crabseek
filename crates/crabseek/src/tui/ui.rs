@@ -1095,7 +1095,7 @@ fn help_line(app: &App) -> &'static str {
             " q quit · Tab/Alt-1…8 tabs · 10j/10k jump · j/k move · Enter open folder · h/l collapse/expand · d download · w wishlist · b browse user · A add buddy · f/F format filter · s search"
         }
         (Tab::Transfers, _) => {
-            " q quit · Tab/Alt-1…8 tabs · j/k move · c cancel · r retry failed · x clear finished · A add buddy · s search"
+            " q quit · Tab/Alt-1…8 tabs · j/k move · c cancel · r retry / queue place · x clear finished · A add buddy · s search"
         }
         (Tab::Browse, _) if app.browse_focus == Focus::Input => {
             " Ctrl-c quit · Enter browse user · Esc list · Ctrl-u clear"
