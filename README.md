@@ -198,6 +198,9 @@ Without this, you can still download from peers that are reachable themselves.
 | | `r` | retry a failed download, or ask again for a queued one's place |
 | | `x` | remove the selected download, cancelling it if it runs |
 | | `X` | clear all finished downloads |
+| | `Enter`, `Space` | open or close a user or folder |
+| | `l`/`h` | open or close; on a file, `h` closes its folder, then the user |
+| | `f` | switch between grouped by user and folder (the default) and a flat list in queue order |
 | uploads | `c` | cancel |
 | | `x` | remove the selected upload, cancelling it if it runs |
 | | `X` | clear all finished uploads |

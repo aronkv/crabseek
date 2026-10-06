@@ -168,7 +168,7 @@ fn shows(filter: FormatFilter, f: &SearchFile) -> bool {
     !is_audio(f) || filter.matches(f)
 }
 
-fn cmp_ignore_case(a: &str, b: &str) -> std::cmp::Ordering {
+pub(super) fn cmp_ignore_case(a: &str, b: &str) -> std::cmp::Ordering {
     a.chars()
         .flat_map(char::to_lowercase)
         .cmp(b.chars().flat_map(char::to_lowercase))

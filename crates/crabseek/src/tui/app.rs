@@ -435,7 +435,7 @@ impl App {
                 .next()
                 .map(|(user, _)| user),
             Tab::Browse => self.browse.as_ref().map(|b| b.username.clone()),
-            Tab::Transfers => self.transfers.selected().map(|t| t.username.clone()),
+            Tab::Transfers => self.transfers.cursor_transfer().map(|t| t.username.clone()),
             Tab::Uploads => self.uploads.selected().map(|u| u.username.clone()),
             Tab::Settings | Tab::Buddies | Tab::Wishlist | Tab::Chat => None,
         }
@@ -1159,9 +1159,20 @@ impl App {
                     self.status = format!("removed {name}");
                 }
             }
+            KeyCode::Enter | KeyCode::Char(' ') => self.transfers.toggle(),
+            KeyCode::Right | KeyCode::Char('l') => self.transfers.expand(),
+            KeyCode::Left | KeyCode::Char('h') => self.transfers.collapse(),
             KeyCode::Char('X') => {
                 let n = self.transfers.clear_finished();
                 self.status = format!("cleared {n} finished downloads");
+            }
+            KeyCode::Char('f') => {
+                self.transfers.set_flat(!self.transfers.is_flat());
+                self.status = if self.transfers.is_flat() {
+                    "downloads in queue order".to_owned()
+                } else {
+                    "downloads grouped by user and folder".to_owned()
+                };
             }
             _ => {}
         }

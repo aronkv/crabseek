@@ -578,7 +578,7 @@ mod tests {
                 .collect::<String>()
         };
         let y = (0..buf.area.height)
-            .find(|&y| row(y).contains("done"))
+            .find(|&y| row(y).contains("02.flac"))
             .unwrap();
         let x = (0..buf.area.width)
             .find(|&x| buf[(x, y)].symbol() == "━")
@@ -641,6 +641,57 @@ mod tests {
         assert!(screen.contains("50%"));
         assert!(screen.contains("done"));
         assert!(screen.contains("2 Downloads (1)"));
+    }
+
+    #[test]
+    fn downloads_group_by_user_and_folder() {
+        let mut app = app_with_results();
+        app.tab = Tab::Transfers;
+        let download = |id, username: &str, filename: &str, state| Event::Download {
+            id,
+            username: username.into(),
+            filename: filename.into(),
+            state,
+        };
+        app.on_event(download(
+            1,
+            "alice",
+            "Music\\Artist\\Album\\01 - Track.flac",
+            DownloadState::Completed {
+                path: PathBuf::from("/tmp/01 - Track.flac"),
+            },
+        ));
+        app.on_event(download(
+            2,
+            "alice",
+            "Music\\Artist\\Album\\02 - Other.flac",
+            DownloadState::Queued { place: None },
+        ));
+        let screen = draw(&mut app);
+        println!("{screen}");
+        let lines: Vec<&str> = screen.lines().collect();
+        let at = |s: &str| lines.iter().position(|l| l.contains(s)).unwrap();
+        assert!(lines[at("Artist\\Album")].contains("1/2 done"));
+        assert!(lines[at("Artist\\Album")].contains("50%"));
+        assert!(at("alice") < at("Artist\\Album"));
+        assert!(at("Artist\\Album") < at("01 - Track.flac"));
+        assert!(at("01 - Track.flac") < at("02 - Other.flac"));
+        assert!(lines[at("alice")].contains("▾ alice"));
+
+        // h on a file closes its folder; the heading sums it up below.
+        app.on_key(KeyEvent::from(KeyCode::Char('h')));
+        let screen = draw(&mut app);
+        println!("{screen}");
+        assert!(screen.contains("▸ Artist\\Album"));
+        assert!(!screen.contains("02 - Other.flac"));
+        assert!(screen.contains("2 files, 1 done"));
+
+        app.on_key(KeyEvent::from(KeyCode::Char('f')));
+        assert_eq!(app.status, "downloads in queue order");
+        let screen = draw(&mut app);
+        println!("{screen}");
+        assert!(!screen.contains(" Artist\\Album"));
+        assert!(!screen.contains("1/2 done"));
     }
 
     #[test]

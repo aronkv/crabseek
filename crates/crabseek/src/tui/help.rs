@@ -53,6 +53,9 @@ fn page(tab: Tab) -> Page {
                 "Everything you queued for download. Uploaders send files when a slot frees \
                  up, so 'queued #n' is your place in their queue. It is asked again every \
                  5 minutes, or with r.",
+                "Downloads are grouped under their user and folder; each heading counts \
+                 the files done and can be closed to hide what is under it. f switches to \
+                 a flat list in queue order and back.",
                 "Unfinished downloads survive a restart and continue where they stopped; the \
                  partial data waits in .part files.",
             ],
@@ -70,6 +73,15 @@ fn page(tab: Tab) -> Page {
                     "remove the selected download, cancelling it if it runs",
                 ),
                 ("X", "clear all finished downloads"),
+                ("Enter, Space", "open or close a user or folder"),
+                (
+                    "l / h",
+                    "open / close; on a file, h closes its folder, then the user",
+                ),
+                (
+                    "f",
+                    "group by user and folder (the default), or list in queue order",
+                ),
                 ("A", "add the uploader to your buddies"),
             ],
         },

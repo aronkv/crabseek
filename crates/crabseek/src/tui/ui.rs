@@ -15,6 +15,7 @@ use super::chat::ChatInput;
 use super::input::TextInput;
 use super::results::{FormatFilter, Results, Row};
 use super::settings::Item;
+use super::transfers::{Summary, Transfer, TransferRow};
 use crate::config::{self, display_path};
 use crate::search::{human_size, quality};
 use unicode_width::UnicodeWidthStr;
@@ -474,69 +475,104 @@ fn render_transfers(frame: &mut Frame, app: &mut App, area: Rect) {
     } else {
         let height = inner.height as usize;
         app.page_size = height;
-        let selected = app.transfers.selected;
-        app.transfers_offset = scroll(app.transfers_offset, selected, height);
-        let offset = app.transfers_offset;
-        let cols = TransferColumns::fit(inner.width);
+        let transfers = &app.transfers;
+        let rows = transfers.rows();
+        let selected = rows
+            .iter()
+            .position(|&r| r == transfers.cursor())
+            .unwrap_or(0);
+        let mut offset = scroll(app.transfers_offset, selected, height);
+        // Moving up onto a group's first file brings its headings along.
+        while offset > 0
+            && !matches!(rows[offset - 1], TransferRow::Transfer(_))
+            && selected + 1 - (offset - 1) <= height
+        {
+            offset -= 1;
+        }
+        app.transfers_offset = offset;
+        let mut cols = TransferColumns::fit(inner.width);
+        // Grouped, the user heads their downloads instead of filling a column.
+        if !transfers.is_flat() && cols.user {
+            cols.user = false;
+            cols.name += TransferColumns::USER_W + 1;
+        }
 
-        let rows: Vec<TableRow> = app
-            .transfers
-            .list
+        let table_rows: Vec<TableRow> = rows
             .iter()
             .skip(offset)
             .take(height)
-            .map(|t| {
-                let (status, bar, speed) = match &t.state {
-                    DownloadState::Queued { place } => (
-                        Span::raw(match place {
-                            Some(p) => format!("queued #{p}"),
-                            None => "queued".to_owned(),
-                        })
-                        .yellow(),
-                        Line::default(),
-                        String::new(),
-                    ),
-                    DownloadState::Transferring { received, size } => (
-                        Span::raw("downloading").cyan(),
-                        progress_bar(*received, *size, cols.bar),
-                        if t.meter.speed > 0.0 {
-                            format!("{}/s", human_size(t.meter.speed as u64))
-                        } else {
-                            String::new()
-                        },
-                    ),
-                    DownloadState::Completed { .. } => (
-                        Span::raw("done").green(),
-                        finished_bar(cols.bar),
-                        String::new(),
-                    ),
-                    DownloadState::Failed { .. } => {
-                        (Span::raw("failed").red(), Line::default(), String::new())
-                    }
-                };
-                let mut row = vec![
-                    Cell::from(status),
-                    Cell::from(bar),
-                    Cell::from(speed),
-                    Cell::from(ellipsis(&t.username, 18)).cyan(),
-                    Cell::from(ellipsis(t.basename(), cols.name)),
-                ];
-                if !cols.user {
-                    row.remove(3);
+            .map(|&row| match row {
+                TransferRow::User(i) => {
+                    let t = &transfers.list[i];
+                    let mut cells = group_cells(&transfers.summary(row), None);
+                    let marker = open_marker(transfers.is_open(row));
+                    cells.push(
+                        Cell::from(format!(
+                            "{marker} {}",
+                            ellipsis(&t.username, cols.name.saturating_sub(2))
+                        ))
+                        .cyan()
+                        .bold(),
+                    );
+                    TableRow::new(cells)
                 }
-                TableRow::new(row)
+                TransferRow::Folder(i) => {
+                    let t = &transfers.list[i];
+                    let mut cells = group_cells(&transfers.summary(row), Some(cols.bar));
+                    let marker = open_marker(transfers.is_open(row));
+                    let name = last_components(t.folder(), 2);
+                    cells.push(
+                        Cell::from(format!(
+                            "  {marker} {}",
+                            ellipsis(&name, cols.name.saturating_sub(4))
+                        ))
+                        .bold(),
+                    );
+                    TableRow::new(cells)
+                }
+                TransferRow::Transfer(i) => {
+                    let t = &transfers.list[i];
+                    let name = if transfers.is_flat() {
+                        ellipsis(t.basename(), cols.name)
+                    } else {
+                        format!(
+                            "    {}",
+                            ellipsis(t.basename(), cols.name.saturating_sub(4))
+                        )
+                    };
+                    TableRow::new(transfer_cells(t, cols, name))
+                }
             })
             .collect();
-        let table = Table::new(rows, cols.widths()).row_highlight_style(SELECTED);
+        let table = Table::new(table_rows, cols.widths()).row_highlight_style(SELECTED);
         let mut state = TableState::new().with_selected(Some(selected - offset));
         frame.render_stateful_widget(table, inner, &mut state);
     }
 
     // Inside the detail block's borders.
     let width = usize::from(detail_area.width.saturating_sub(2));
-    let detail: Vec<Line> = match app.transfers.selected() {
-        None => vec![],
-        Some(t) => {
+    let transfers = &app.transfers;
+    let detail: Vec<Line> = match (transfers.cursor(), transfers.cursor_transfer()) {
+        (_, None) => vec![],
+        (row @ (TransferRow::User(_) | TransferRow::Folder(_)), Some(t)) => {
+            let sum = transfers.summary(row);
+            let mut counts = format!("{} files, {} done", sum.total, sum.done);
+            if sum.running > 0 {
+                counts.push_str(&format!(", {} downloading", sum.running));
+            }
+            if sum.failed > 0 {
+                counts.push_str(&format!(", {} failed", sum.failed));
+            }
+            let head = match row {
+                TransferRow::Folder(_) => t.folder(),
+                _ => &t.username,
+            };
+            vec![
+                Line::from(ellipsis_start(head, width)).dark_gray(),
+                Line::from(ellipsis(&counts, width)),
+            ]
+        }
+        (TransferRow::Transfer(_), Some(t)) => {
             let state = match &t.state {
                 DownloadState::Queued { place: Some(p) } => format!("queued, place {p}"),
                 DownloadState::Queued { place: None } => "queued, waiting for the peer".to_owned(),
@@ -559,6 +595,74 @@ fn render_transfers(frame: &mut Frame, app: &mut App, area: Rect) {
         Paragraph::new(detail).block(Block::bordered().border_style(Style::new().dark_gray())),
         detail_area,
     );
+}
+
+fn transfer_cells(t: &Transfer, cols: TransferColumns, name: String) -> Vec<Cell<'static>> {
+    let (status, bar, speed) = match &t.state {
+        DownloadState::Queued { place } => (
+            Span::raw(match place {
+                Some(p) => format!("queued #{p}"),
+                None => "queued".to_owned(),
+            })
+            .yellow(),
+            Line::default(),
+            String::new(),
+        ),
+        DownloadState::Transferring { received, size } => (
+            Span::raw("downloading").cyan(),
+            progress_bar(*received, *size, cols.bar),
+            speed_text(t.meter.speed),
+        ),
+        DownloadState::Completed { .. } => (
+            Span::raw("done").green(),
+            finished_bar(cols.bar),
+            String::new(),
+        ),
+        DownloadState::Failed { .. } => (Span::raw("failed").red(), Line::default(), String::new()),
+    };
+    let mut cells = vec![Cell::from(status), Cell::from(bar), Cell::from(speed)];
+    if cols.user {
+        cells.push(Cell::from(ellipsis(&t.username, 18)).cyan());
+    }
+    cells.push(Cell::from(name));
+    cells
+}
+
+/// Status, bar and speed cells summing up a group of downloads: how many
+/// files are done, coloured by what the rest are doing. The bar counts
+/// files, as queued ones have no known size yet; `None` leaves it out.
+fn group_cells(sum: &Summary, bar: Option<usize>) -> Vec<Cell<'static>> {
+    let status = Span::raw(format!("{}/{} done", sum.done, sum.total));
+    let status = if sum.done == sum.total {
+        status.green()
+    } else if sum.running > 0 {
+        status.cyan()
+    } else if sum.failed > 0 {
+        status.red()
+    } else {
+        status.yellow()
+    };
+    vec![
+        Cell::from(status),
+        Cell::from(match bar {
+            None => Line::default(),
+            Some(w) if sum.done == sum.total => finished_bar(w),
+            Some(w) => progress_bar(sum.done, sum.total, w),
+        }),
+        Cell::from(speed_text(sum.speed)),
+    ]
+}
+
+fn open_marker(open: bool) -> &'static str {
+    if open { "▾" } else { "▸" }
+}
+
+fn speed_text(speed: f64) -> String {
+    if speed > 0.0 {
+        format!("{}/s", human_size(speed as u64))
+    } else {
+        String::new()
+    }
 }
 
 fn render_browse(frame: &mut Frame, app: &mut App, area: Rect) {
@@ -1093,7 +1197,7 @@ fn help_line(app: &App) -> &'static str {
             " q quit · 1-8 tabs · j/k move · Enter open/download · d download · w wishlist · b browse user · A add buddy · f/F format filter · s search"
         }
         (Tab::Transfers, _) => {
-            " q quit · 1-8 tabs · j/k move · c cancel · r retry / queue place · x remove · X clear finished · A add buddy · s search"
+            " q quit · 1-8 tabs · j/k move · c cancel · r retry / queue place · x remove · X clear finished · Enter open/close · f group/flat · A add buddy · s search"
         }
         (Tab::Browse, _) if app.browse_focus == Focus::Input => {
             " Ctrl-c quit · Enter browse user · Esc list · Ctrl-u clear"
