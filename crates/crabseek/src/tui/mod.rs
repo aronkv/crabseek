@@ -620,13 +620,13 @@ mod tests {
             app.chats.open(&format!("user{i:02}"));
         }
         // Going up from the bottom keeps the view still until the top edge.
-        app.on_key(KeyEvent::new(KeyCode::Char('7'), KeyModifiers::ALT));
+        app.on_key(KeyEvent::from(KeyCode::Char('7')));
         app.on_key(KeyEvent::from(KeyCode::Char('G')));
         let top = first_list_row(&mut app, 0);
         app.on_key(KeyEvent::from(KeyCode::Char('k')));
         assert_eq!(first_list_row(&mut app, 0), top, "wishlist");
 
-        app.on_key(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::ALT));
+        app.on_key(KeyEvent::from(KeyCode::Char('5')));
         app.on_key(KeyEvent::from(KeyCode::Char('G')));
         let top = first_list_row(&mut app, 0);
         app.on_key(KeyEvent::from(KeyCode::Char('k')));
@@ -833,7 +833,7 @@ mod tests {
 
         app.on_key(KeyEvent::from(KeyCode::Char('3')));
         assert_eq!(app.tab, Tab::Uploads);
-        app.on_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::ALT));
+        app.on_key(KeyEvent::from(KeyCode::Char('4')));
         assert_eq!(app.tab, Tab::Browse);
         app.on_key(KeyEvent::from(KeyCode::F(5)));
         assert_eq!(app.tab, Tab::Chat);
@@ -1118,7 +1118,7 @@ mod tests {
         app.on_key(KeyEvent::from(KeyCode::Char('w')));
         assert!(app.status.contains("already on the wishlist"));
 
-        app.on_key(KeyEvent::new(KeyCode::Char('7'), KeyModifiers::ALT));
+        app.on_key(KeyEvent::from(KeyCode::Char('7')));
         assert_eq!(app.tab, Tab::Wishlist);
         app.on_key(KeyEvent::from(KeyCode::Char('a')));
         for c in "aphex twin".chars() {
@@ -1174,7 +1174,7 @@ mod tests {
         .unwrap();
         // Both Search and Browse start on their lists, not in a text box.
         assert_eq!(app.focus, Focus::List);
-        app.on_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::ALT));
+        app.on_key(KeyEvent::from(KeyCode::Char('4')));
         assert_eq!(app.tab, Tab::Browse);
         assert_eq!(app.browse_focus, Focus::List);
         // So `?` opens the help instead of being typed.
@@ -1188,7 +1188,7 @@ mod tests {
         app.on_key(KeyEvent::from(KeyCode::Esc));
         assert!(!app.help);
 
-        app.on_key(KeyEvent::new(KeyCode::Char('7'), KeyModifiers::ALT));
+        app.on_key(KeyEvent::from(KeyCode::Char('7')));
         app.on_key(KeyEvent::from(KeyCode::Char('?')));
         let screen = draw(&mut app);
         println!("{screen}");
@@ -1223,7 +1223,7 @@ mod tests {
         app.on_key(KeyEvent::from(KeyCode::Esc));
 
         // Reading carol's conversation clears its unread count.
-        app.on_key(KeyEvent::new(KeyCode::Char('5'), KeyModifiers::ALT));
+        app.on_key(KeyEvent::from(KeyCode::Char('5')));
         app.on_key(KeyEvent::from(KeyCode::Char('j')));
         assert_eq!(app.chats.selected().unwrap().username, "carol");
         assert_eq!(app.chats.total_unread(), 0);
@@ -1305,6 +1305,23 @@ mod tests {
         app.on_key(KeyEvent::from(KeyCode::Char('w')));
         assert!(app.status.contains("wishlist"), "{}", app.status);
         assert_eq!(status_fg(&mut app), Color::Yellow);
+    }
+
+    /// Alt with a digit does nothing: the digits switch tabs on their own.
+    #[test]
+    fn alt_digits_do_not_switch_tabs() {
+        let mut app = App::new(
+            Client::offline(),
+            "me".into(),
+            &Config::default(),
+            vec![],
+            None,
+        )
+        .unwrap();
+        app.on_key(KeyEvent::new(KeyCode::Char('4'), KeyModifiers::ALT));
+        assert_eq!(app.tab, Tab::Search);
+        app.on_key(KeyEvent::from(KeyCode::Char('4')));
+        assert_eq!(app.tab, Tab::Browse);
     }
 
     #[test]

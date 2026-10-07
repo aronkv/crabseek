@@ -34,8 +34,8 @@ pub enum Tab {
 }
 
 impl Tab {
-    /// Tab-bar order, close to Nicotine+'s; the numbers (`1`…`8`, also
-    /// with Alt, and `F1`…`F8`) and titles follow it. Settings stays last.
+    /// Tab-bar order, close to Nicotine+'s; the numbers (`1`…`8` and
+    /// `F1`…`F8`) and titles follow it. Settings stays last.
     pub const ORDER: [Tab; 8] = [
         Tab::Search,
         Tab::Transfers,
@@ -676,8 +676,9 @@ impl App {
             KeyCode::Char('q' | 'Q') => self.request_quit(),
             KeyCode::Tab => self.tab = self.tab.cycle(1),
             KeyCode::BackTab => self.tab = self.tab.cycle(-1),
-            // With or without Alt.
-            KeyCode::Char(c @ '1'..='8') => self.tab = Tab::numbered(c as u8 - b'0').unwrap(),
+            KeyCode::Char(c @ '1'..='8') if !key.modifiers.contains(KeyModifiers::ALT) => {
+                self.tab = Tab::numbered(c as u8 - b'0').unwrap()
+            }
             KeyCode::F(n @ 1..=8) => self.tab = Tab::numbered(n).unwrap(),
             // `m` writes to the user of the selected row.
             KeyCode::Char('m') if self.tab != Tab::Chat => {
