@@ -21,8 +21,8 @@ directories = "6.0.0"
 futures = "0.3.34"
 notify-rust = "4.17.0"
 ratatui = { version = "0.30.2", features = ["unstable-rendered-line-info"] }
-crabseek-net = { version = "0.2.0", path = "../net" }
-crabseek-proto = { version = "0.2.0", path = "../proto" }
+crabseek-net = { version = "0.2.1", path = "../net" }
+crabseek-proto = { version = "0.2.1", path = "../proto" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 tokio = { version = "1.53.1", features = ["full"] }
