@@ -13,7 +13,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crabseek_proto::ConnectionType;
 use crabseek_proto::distrib::DistribMsg;
@@ -48,6 +48,13 @@ const PENDING_TIMEOUT: Duration = Duration::from_secs(30);
 /// run into the open-file limit (often 1024 under systemd). The rest are
 /// declined right away.
 const MAX_PIERCES: usize = 128;
+
+/// How long a `P` connection that a newer one replaced stays open, and how
+/// many of them we keep. Two connections to one user can be set up at once,
+/// and each side may end up preferring a different one; closing the one we
+/// stop using would lose what the other side still sends on it.
+const RETIRED_KEEP: Duration = Duration::from_secs(300);
+const MAX_RETIRED: usize = 64;
 
 /// Share searches running on the blocking pool at once. Distributed
 /// searches can arrive in bursts; the ones over the cap are dropped, which
@@ -232,8 +239,10 @@ impl Client {
                 internal: tx.clone(),
                 events: event_tx,
                 peers: HashMap::new(),
+                retired: Vec::new(),
                 outbox: HashMap::new(),
                 pending: HashMap::new(),
+                superseded: HashMap::new(),
                 awaiting_address: HashMap::new(),
                 searches: HashSet::new(),
                 tokens: tokens.clone(),
@@ -624,9 +633,15 @@ struct Actor {
     internal: mpsc::UnboundedSender<Internal>,
     events: mpsc::UnboundedSender<Event>,
     peers: HashMap<String, PeerHandle>,
+    /// Replaced connections, still read from until they time out.
+    retired: Vec<(Instant, PeerHandle)>,
     /// Messages waiting for a `P` connection that is being opened.
     outbox: HashMap<String, Vec<PeerMsg>>,
     pending: HashMap<u32, Pending>,
+    /// `P` attempts that the other path won, by token, with the user. Their
+    /// direct connection may still open, and the other side may already be
+    /// sending on it, so it is kept instead of dropped.
+    superseded: HashMap<u32, String>,
     /// Tokens waiting for a `GetPeerAddress` answer, by username.
     awaiting_address: HashMap<String, Vec<u32>>,
     /// Tokens of searches whose results we still want.
@@ -736,10 +751,14 @@ impl Actor {
                 Internal::DirectDone { token, result } => match result {
                     Ok(stream) => {
                         if let Some(p) = self.pending.remove(&token) {
+                            self.supersede(token, &p);
                             self.on_connected(p, stream, ConnectMethod::Direct);
+                        } else if let Some(username) = self.superseded.remove(&token) {
+                            self.register_peer(username, stream, ConnectMethod::Direct);
                         }
                     }
                     Err(e) => {
+                        self.superseded.remove(&token);
                         if let Some(p) = self.pending.get_mut(&token) {
                             p.direct_error = Some(e.to_string());
                             self.fail_if_exhausted(token);
@@ -757,6 +776,7 @@ impl Actor {
                         .await
                 }
                 Internal::PendingTimeout { token } => {
+                    self.superseded.remove(&token);
                     if self.pending.contains_key(&token) {
                         self.fail(token, "timed out".to_owned());
                     }
@@ -1045,8 +1065,14 @@ impl Actor {
                 ..
             } => self.on_remote_connection(username, conn_type, stream),
             PeerInitMsg::PierceFirewall { token } => match self.pending.remove(&token) {
-                Some(p) => self.on_connected(p, stream, ConnectMethod::Indirect),
-                None => tracing::debug!(token, "PierceFireWall for unknown token"),
+                Some(p) => {
+                    self.supersede(token, &p);
+                    self.on_connected(p, stream, ConnectMethod::Indirect);
+                }
+                None => match self.superseded.remove(&token) {
+                    Some(username) => self.register_peer(username, stream, ConnectMethod::Indirect),
+                    None => tracing::debug!(token, "PierceFireWall for unknown token"),
+                },
             },
         }
     }
@@ -1077,6 +1103,14 @@ impl Actor {
         }
     }
 
+    /// The attempt `p` is done, but its other path (direct or indirect)
+    /// may still deliver a connection; see [`Actor::superseded`].
+    fn supersede(&mut self, token: u32, p: &Pending) {
+        if p.purpose == Purpose::Peer {
+            self.superseded.insert(token, p.username.clone());
+        }
+    }
+
     fn register_peer(&mut self, username: String, stream: TcpStream, method: ConnectMethod) {
         self.next_conn_id += 1;
         let handle = peer::spawn(
@@ -1089,10 +1123,26 @@ impl Actor {
             handle.send(msg);
         }
         // Other attempts to reach this user are no longer needed.
-        self.pending
-            .retain(|_, p| !(p.username == username && p.purpose == Purpose::Peer));
-        // Only one P connection per user; the old one closes when dropped.
-        self.peers.insert(username.clone(), handle);
+        let others: Vec<u32> = self
+            .pending
+            .iter()
+            .filter(|(_, p)| p.username == username && p.purpose == Purpose::Peer)
+            .map(|(&token, _)| token)
+            .collect();
+        for token in others {
+            self.pending.remove(&token);
+            self.superseded.insert(token, username.clone());
+        }
+        // Only the newest P connection of a user is written to. The one it
+        // replaces keeps being read, and closes when it times out.
+        self.retired
+            .retain(|(since, _)| since.elapsed() < RETIRED_KEEP);
+        if let Some(old) = self.peers.insert(username.clone(), handle) {
+            self.retired.push((Instant::now(), old));
+            if self.retired.len() > MAX_RETIRED {
+                self.retired.remove(0);
+            }
+        }
         self.emit(Event::PeerConnected { username, method });
     }
 

@@ -6,7 +6,7 @@
 //! the data itself.
 
 use std::collections::HashMap;
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -16,7 +16,7 @@ use crabseek_net::{
     Client, ClientConfig, ConnectMethod, DownloadId, DownloadState, Event, UploadState, connect,
 };
 use crabseek_proto::peer::PeerMsg;
-use crabseek_proto::peer_init::PeerInitMsg;
+use crabseek_proto::peer_init::{ConnectionType, PeerInitMsg};
 use crabseek_proto::wire::{Reader, WireWrite};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -358,11 +358,28 @@ async fn start(
     download_dir: &Path,
     shared_dirs: Vec<PathBuf>,
 ) -> (Client, mpsc::UnboundedReceiver<Event>) {
+    start_on(
+        server,
+        username,
+        free_port().await,
+        download_dir,
+        shared_dirs,
+    )
+    .await
+}
+
+async fn start_on(
+    server: &str,
+    username: &str,
+    listen_port: u16,
+    download_dir: &Path,
+    shared_dirs: Vec<PathBuf>,
+) -> (Client, mpsc::UnboundedReceiver<Event>) {
     let (client, info, events) = Client::start(ClientConfig {
         server: server.to_owned(),
         username: username.to_owned(),
         password: "pw".to_owned(),
-        listen_port: free_port().await,
+        listen_port,
         download_dir: download_dir.to_owned(),
         shared_dirs,
         share_cache: None,
@@ -976,6 +993,86 @@ async fn hang_up(stream: TcpStream, events: &mut mpsc::UnboundedReceiver<Event>)
     .await;
 }
 
+/// Logs in as a user who is just a socket: it listens on the returned
+/// listener and does nothing unless the test makes it.
+async fn bare_user(server: &str, name: &str) -> (TcpListener, TcpStream) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let mut conn = TcpStream::connect(server).await.unwrap();
+    conn.write_all(&frame(1, |b| b.put_string_wire(name)))
+        .await
+        .unwrap();
+    conn.write_all(&frame(2, |b| b.put_u32_le(port.into())))
+        .await
+        .unwrap();
+    // Our own address comes back only after the server took the port.
+    conn.write_all(&frame(3, |b| b.put_string_wire(name)))
+        .await
+        .unwrap();
+    loop {
+        let len = conn.read_u32_le().await.unwrap();
+        let mut payload = vec![0; len as usize];
+        conn.read_exact(&mut payload).await.unwrap();
+        if Reader::new(&payload).u32().unwrap() == 3 {
+            break;
+        }
+    }
+    (listener, conn)
+}
+
+/// Two connections between the same pair can be set up at once, and each
+/// side may end up preferring a different one. The one a side stops using
+/// must stay open, or what the other side still sends on it is lost (a
+/// TransferRequest that way left both sides waiting for each other).
+#[tokio::test]
+async fn replaced_peer_connection_stays_open() {
+    let root = temp_dir("replaced");
+    let remote = "Music\\Album\\01 - Song.flac";
+    let server = fake_server(&[]).await;
+    let (listener, _carol) = bare_user(&server, "carol").await;
+    let bob_port = free_port().await;
+    let (bob, mut bob_events) = start_on(&server, "bob", bob_port, &root.join("b"), vec![]).await;
+    let id = bob.download("carol", remote).unwrap();
+
+    // Bob dials Carol.
+    let (mut first, _) = listener.accept().await.unwrap();
+    connect::read_init(&mut first).await.unwrap();
+    // Carol dials Bob too, and Bob switches to that connection.
+    let to_bob = SocketAddr::from((Ipv4Addr::LOCALHOST, bob_port));
+    let _second = connect::direct(&[to_bob], "carol", ConnectionType::Peer)
+        .await
+        .unwrap();
+    wait_for(&mut bob_events, |e| match e {
+        Event::PeerConnected {
+            username,
+            method: ConnectMethod::Inbound,
+        } if username == "carol" => Some(()),
+        _ => None,
+    })
+    .await;
+
+    // Bob wrote his queue requests to the first one. It stays open.
+    let mut buf = [0; 4096];
+    loop {
+        match tokio::time::timeout(Duration::from_millis(300), first.read(&mut buf)).await {
+            Err(_) => break,
+            Ok(Ok(0)) => panic!("Bob closed the connection he stopped using"),
+            Ok(Ok(_)) => {}
+            Ok(Err(e)) => panic!("{e}"),
+        }
+    }
+    // And what Carol still sends on it arrives.
+    let mut out = BytesMut::new();
+    PeerMsg::PlaceInQueueResponse {
+        filename: remote.to_owned(),
+        place: 7,
+    }
+    .encode(&mut out);
+    first.write_all(&out).await.unwrap();
+    assert_eq!(queue_place(&mut bob_events, id).await, 7);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 /// Queue places go stale as the uploader's queue moves, so Bob asks again.
 /// An uploader that cannot be reached for that must not fail a download
 /// it already has in its queue.
@@ -986,30 +1083,7 @@ async fn queue_place_is_asked_again() {
     let server = fake_server(&[]).await;
 
     // Carol is a bare socket that keeps Bob queued.
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let port = listener.local_addr().unwrap().port();
-    let mut carol = TcpStream::connect(&server).await.unwrap();
-    carol
-        .write_all(&frame(1, |b| b.put_string_wire("carol")))
-        .await
-        .unwrap();
-    carol
-        .write_all(&frame(2, |b| b.put_u32_le(port.into())))
-        .await
-        .unwrap();
-    // Our own address comes back only after the server took the port.
-    carol
-        .write_all(&frame(3, |b| b.put_string_wire("carol")))
-        .await
-        .unwrap();
-    loop {
-        let len = carol.read_u32_le().await.unwrap();
-        let mut payload = vec![0; len as usize];
-        carol.read_exact(&mut payload).await.unwrap();
-        if Reader::new(&payload).u32().unwrap() == 3 {
-            break;
-        }
-    }
+    let (listener, carol) = bare_user(&server, "carol").await;
 
     let (bob, mut bob_events) = start(&server, "bob", &root.join("b"), vec![]).await;
     let id = bob.download("carol", remote).unwrap();
