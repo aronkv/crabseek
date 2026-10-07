@@ -42,7 +42,8 @@ you type `crabseek`, search, and download whole albums in a few keystrokes.
   minutes as the server allows, and the Wishlist tab counts files you have not seen
   yet. `w` on a search's results adds it; `Enter` on a wish opens everything found.
 - **One-key downloads:** `d` on a file or a whole folder. Interrupted downloads resume
-  from where they stopped (`.part` files), and name clashes never overwrite anything.
+  from where they stopped (`.part` files), and name clashes never overwrite anything,
+  not even when two users share a file with the same name.
 - **Transfer view:** live progress, speed, queue position and failure reasons, with
   retry and cancel. The download list survives restarts, and unfinished downloads
   continue where they stopped.
