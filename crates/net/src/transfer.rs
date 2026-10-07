@@ -99,17 +99,25 @@ async fn finish(part: &Path, path: PathBuf) -> io::Result<PathBuf> {
         };
         match fs::hard_link(part, &candidate).await {
             Ok(()) => {
-                let _ = fs::remove_file(part).await;
+                // A part left next to the file would be "resumed" at its
+                // full size next time and linked once more.
+                if let Err(e) = fs::remove_file(part).await {
+                    let _ = fs::remove_file(&candidate).await;
+                    return Err(e);
+                }
                 return Ok(candidate);
             }
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
             // No hard links here (FAT, some network shares): rename after
             // a check, which can still race with another download.
-            Err(_) if !fs::try_exists(&candidate).await.unwrap_or(true) => {
-                fs::rename(part, &candidate).await?;
-                return Ok(candidate);
-            }
-            Err(_) => {}
+            Err(e) => match fs::try_exists(&candidate).await {
+                Ok(false) => {
+                    fs::rename(part, &candidate).await?;
+                    return Ok(candidate);
+                }
+                Ok(true) => {}
+                Err(_) => return Err(e),
+            },
         }
     }
     unreachable!()
@@ -411,6 +419,27 @@ mod tests {
         let (result, ()) = tokio::join!(receive(down, target.clone(), TAG, 5000, |_| {}), uploader);
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
         assert_eq!(partial_size(&target, TAG).await, 1000);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A folder that cannot even be checked is an error, not a reason to
+    /// try `name (1)`, `name (2)`, ... forever.
+    #[tokio::test]
+    async fn finish_gives_up_on_an_unusable_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = temp_dir("locked");
+        let locked = dir.join("locked");
+        std::fs::create_dir_all(&locked).unwrap();
+        std::fs::write(dir.join("song.flac.part"), b"data").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            finish(&dir.join("song.flac.part"), locked.join("song.flac")),
+        )
+        .await;
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(result.expect("finish kept trying").is_err());
+        assert!(dir.join("song.flac.part").exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
