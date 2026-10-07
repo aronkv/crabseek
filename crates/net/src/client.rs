@@ -702,7 +702,11 @@ impl Actor {
                     Ok(mapping) => PortMapStatus::Mapped(mapping),
                     Err(e) => PortMapStatus::Failed(e),
                 })),
-                Internal::Ping => self.send_server(ServerRequest::Ping).await,
+                Internal::Ping => {
+                    self.retired
+                        .retain(|(since, _)| since.elapsed() < RETIRED_KEEP);
+                    self.send_server(ServerRequest::Ping).await
+                }
                 Internal::RescanShares(dirs) => self.rescan_shares(dirs),
                 Internal::SharesScanned { index, errors } => {
                     self.on_shares_scanned(index, errors).await
@@ -757,8 +761,9 @@ impl Actor {
                             self.register_peer(username, stream, ConnectMethod::Direct);
                         }
                     }
+                    // A superseded token stays until its PendingTimeout:
+                    // the indirect path may still deliver a connection.
                     Err(e) => {
-                        self.superseded.remove(&token);
                         if let Some(p) = self.pending.get_mut(&token) {
                             p.direct_error = Some(e.to_string());
                             self.fail_if_exhausted(token);
@@ -1134,9 +1139,8 @@ impl Actor {
             self.superseded.insert(token, username.clone());
         }
         // Only the newest P connection of a user is written to. The one it
-        // replaces keeps being read, and closes when it times out.
-        self.retired
-            .retain(|(since, _)| since.elapsed() < RETIRED_KEEP);
+        // replaces keeps being read, and closes once it is older than
+        // RETIRED_KEEP (checked with every ServerPing, once a minute).
         if let Some(old) = self.peers.insert(username.clone(), handle) {
             self.retired.push((Instant::now(), old));
             if self.retired.len() > MAX_RETIRED {
