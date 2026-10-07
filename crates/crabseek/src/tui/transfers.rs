@@ -5,7 +5,6 @@ use std::time::{Duration, Instant};
 
 use crabseek_net::{DownloadId, DownloadState};
 
-use super::results::cmp_ignore_case;
 use crate::persist::{SavedDownload, SavedStatus};
 
 /// Samples closer together than this are skipped: two progress events
@@ -62,6 +61,10 @@ impl SpeedMeter {
     pub fn reset(&mut self) {
         *self = Self::default();
     }
+}
+
+fn lowercase(s: &str) -> String {
+    s.chars().flat_map(char::to_lowercase).collect()
 }
 
 fn folder_key(t: &Transfer) -> (String, String) {
@@ -223,11 +226,17 @@ impl Transfers {
     fn order(&self) -> Vec<usize> {
         let mut order: Vec<usize> = (0..self.list.len()).collect();
         if !self.flat {
-            // Stable, so a folder's files keep their queue order.
-            order.sort_by(|&a, &b| {
-                let (a, b) = (&self.list[a], &self.list[b]);
-                cmp_ignore_case(&a.username, &b.username)
-                    .then_with(|| cmp_ignore_case(a.folder(), b.folder()))
+            // Keys are built once per sort: lowercasing inside a comparison
+            // made every sort of a long list slow. Equal keys keep queue
+            // order, so a folder's files do.
+            order.sort_by_cached_key(|&i| {
+                let t = &self.list[i];
+                (
+                    lowercase(&t.username),
+                    t.username.as_str(),
+                    lowercase(t.folder()),
+                    t.folder(),
+                )
             });
         }
         order
@@ -364,10 +373,11 @@ impl Transfers {
     }
 
     pub fn move_by(&mut self, delta: isize) {
-        let Some(pos) = self.position() else {
+        let rows = self.rows();
+        let Some(pos) = rows.iter().position(|&r| r == self.cursor) else {
             return;
         };
-        self.select_at(pos.saturating_add_signed(delta));
+        self.cursor = rows[pos.saturating_add_signed(delta).min(rows.len() - 1)];
     }
 
     pub fn remove(&mut self, id: DownloadId) {
@@ -526,6 +536,27 @@ mod tests {
         assert_eq!(t.list.len(), 1);
         assert_eq!(t.list[0].basename(), "b.flac");
         assert_eq!(t.active(), 1);
+    }
+
+    /// The grouped order is the one the plain comparison gives: case-blind
+    /// first, the exact text to break ties, queue order after that.
+    #[test]
+    fn grouped_order_matches_a_plain_comparison() {
+        use super::super::results::cmp_ignore_case;
+        let mut t = Transfers::default();
+        let users = ["bob", "Bob", "alice", "Alice", "Émile", "émile", "zed"];
+        let folders = ["b", "B", "a\\x", "A\\x", "ß", "SS", ""];
+        for i in 0..200u64 {
+            let (u, f) = (users[(i % 7) as usize], folders[(i / 7 % 7) as usize]);
+            t.update(i, u.into(), format!("{f}\\{i}.flac"), queued());
+        }
+        let mut expected: Vec<usize> = (0..t.list.len()).collect();
+        expected.sort_by(|&a, &b| {
+            let (a, b) = (&t.list[a], &t.list[b]);
+            cmp_ignore_case(&a.username, &b.username)
+                .then_with(|| cmp_ignore_case(a.folder(), b.folder()))
+        });
+        assert_eq!(t.order(), expected);
     }
 
     #[test]
