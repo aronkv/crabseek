@@ -25,12 +25,21 @@ pub async fn read_transfer_init(stream: &mut TcpStream) -> io::Result<u32> {
         .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "no FileTransferInit"))?
 }
 
+/// The longest file or folder name (in bytes) on common filesystems.
+const NAME_MAX: usize = 255;
+/// Room a file name leaves free for `.<tag>.part` and ` (n)`.
+const SUFFIX_ROOM: usize = 24;
+
 /// Where a remote file ends up: `<dir>/<remote parent folder>/<file name>`.
-/// Path components are sanitized so a peer cannot escape `dir`.
+/// Path components are sanitized so a peer cannot escape `dir`, and
+/// shortened so the file and its `.part` can be created.
 pub fn local_path(dir: &Path, remote: &str) -> PathBuf {
     let mut parts = remote.rsplit(['\\', '/']);
-    let name = sanitize(parts.next().unwrap_or(remote));
-    match parts.next().map(sanitize) {
+    let name = shorten(
+        sanitize(parts.next().unwrap_or(remote)),
+        NAME_MAX - SUFFIX_ROOM,
+    );
+    match parts.next().map(|f| shorten(sanitize(f), NAME_MAX)) {
         Some(folder) if !folder.is_empty() => dir.join(folder).join(name),
         _ => dir.join(name),
     }
@@ -51,6 +60,23 @@ fn sanitize(part: &str) -> String {
         "" | "." | ".." => "_".to_owned(),
         s => s.to_owned(),
     }
+}
+
+/// Cuts `name` down to `max` bytes at a character boundary, keeping a
+/// short extension.
+fn shorten(name: String, max: usize) -> String {
+    if name.len() <= max {
+        return name;
+    }
+    let ext = name
+        .rfind('.')
+        .filter(|&i| i > 0 && name.len() - i <= 16)
+        .map_or("", |i| &name[i..]);
+    let mut cut = max - ext.len();
+    while !name.is_char_boundary(cut) {
+        cut -= 1;
+    }
+    format!("{}{ext}", &name[..cut])
 }
 
 /// Moves `part` to `path`, or to `name (1).ext`, `name (2).ext`, ... when
@@ -208,6 +234,49 @@ mod tests {
         assert_eq!(local_path(dir, "song.mp3"), Path::new("/dl/song.mp3"));
         assert_eq!(local_path(dir, "a\\..\\..\\x"), Path::new("/dl/_/x"));
         assert_eq!(local_path(dir, "a\\.."), Path::new("/dl/a/_"));
+    }
+
+    #[test]
+    fn long_names_are_shortened_to_fit() {
+        let dir = Path::new("/dl");
+        let long = format!("{}.flac", "x".repeat(300));
+        let path = local_path(dir, &format!("Album\\{long}"));
+        let name = path.file_name().unwrap().to_str().unwrap();
+        assert!(name.len() <= NAME_MAX - SUFFIX_ROOM, "{}", name.len());
+        assert!(name.ends_with(".flac"));
+        // Two-byte characters are never cut in half.
+        let wide = format!("{}.mp3", "é".repeat(200));
+        let name = local_path(dir, &wide)
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_owned();
+        assert!(name.len() <= NAME_MAX - SUFFIX_ROOM && name.ends_with("é.mp3"));
+        let folder = local_path(dir, &format!("{}\\a.flac", "d".repeat(400)));
+        assert_eq!(
+            folder.parent().unwrap().file_name().unwrap().len(),
+            NAME_MAX
+        );
+        // Short names are left alone.
+        assert_eq!(
+            local_path(dir, "A\\song.flac"),
+            Path::new("/dl/A/song.flac")
+        );
+    }
+
+    #[tokio::test]
+    async fn a_very_long_name_can_still_be_received() {
+        let dir = temp_dir("long");
+        let target = local_path(&dir, &format!("Album\\{}.flac", "x".repeat(251)));
+        let data = vec![5u8; 1000];
+        let (down, up) = pair().await;
+        let (result, _) = tokio::join!(
+            receive(down, target.clone(), TAG, 1000, |_| {}),
+            upload(up, &data)
+        );
+        assert_eq!(std::fs::read(result.unwrap()).unwrap(), data);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     async fn pair() -> (TcpStream, TcpStream) {
