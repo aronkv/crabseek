@@ -257,11 +257,12 @@ impl Actor {
         };
         let size = d.transfer.unwrap().1;
         let target = transfer::local_path(&self.download_dir, &d.filename);
+        let tag = transfer::source_tag(&d.username, &d.filename);
 
         let tx = self.internal.clone();
         let progress_tx = tx.clone();
         let task = tokio::spawn(async move {
-            let result = transfer::receive(stream, target, size, |received| {
+            let result = transfer::receive(stream, target, tag, size, |received| {
                 let _ = progress_tx.send(Internal::DownloadProgress { id, received });
             })
             .await;

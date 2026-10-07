@@ -53,11 +53,10 @@ fn sanitize(part: &str) -> String {
     }
 }
 
-/// `path` if free, otherwise `name (1).ext`, `name (2).ext`, ...
-async fn unique_path(path: PathBuf) -> PathBuf {
-    if !fs::try_exists(&path).await.unwrap_or(false) {
-        return path;
-    }
+/// Moves `part` to `path`, or to `name (1).ext`, `name (2).ext`, ... when
+/// that is taken. A hard link fails instead of replacing a file, so two
+/// downloads that finish together cannot overwrite each other.
+async fn finish(part: &Path, path: PathBuf) -> io::Result<PathBuf> {
     let stem = path
         .file_stem()
         .map(|s| s.to_string_lossy().into_owned())
@@ -66,33 +65,77 @@ async fn unique_path(path: PathBuf) -> PathBuf {
         .extension()
         .map(|e| format!(".{}", e.to_string_lossy()))
         .unwrap_or_default();
-    for i in 1.. {
-        let candidate = path.with_file_name(format!("{stem} ({i}){ext}"));
-        if !fs::try_exists(&candidate).await.unwrap_or(false) {
-            return candidate;
+    for i in 0.. {
+        let candidate = if i == 0 {
+            path.clone()
+        } else {
+            path.with_file_name(format!("{stem} ({i}){ext}"))
+        };
+        match fs::hard_link(part, &candidate).await {
+            Ok(()) => {
+                let _ = fs::remove_file(part).await;
+                return Ok(candidate);
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
+            // No hard links here (FAT, some network shares): rename after
+            // a check, which can still race with another download.
+            Err(_) if !fs::try_exists(&candidate).await.unwrap_or(true) => {
+                fs::rename(part, &candidate).await?;
+                return Ok(candidate);
+            }
+            Err(_) => {}
         }
     }
     unreachable!()
 }
 
-fn part_path(path: &Path) -> PathBuf {
+/// Identifies where a download comes from. Two users can share a file
+/// under the same folder and name, which maps both to one local path; the
+/// tag keeps their partial data apart.
+pub fn source_tag(username: &str, remote: &str) -> u32 {
+    // FNV-1a rather than `DefaultHasher`, whose output may change between
+    // Rust versions and would orphan the partial files of a restart.
+    username
+        .bytes()
+        .chain([0])
+        .chain(remote.bytes())
+        .fold(0x811c_9dc5, |h, b| {
+            (h ^ u32::from(b)).wrapping_mul(0x0100_0193)
+        })
+}
+
+fn part_path(path: &Path, tag: u32) -> PathBuf {
     let mut name = path.file_name().unwrap_or_default().to_os_string();
-    name.push(".part");
+    name.push(format!(".{tag:08x}.part"));
     path.with_file_name(name)
 }
 
-/// Receives the file into `<target>.part`, resuming if it already exists,
-/// and renames it once complete. Returns the final path.
+/// Older versions named the partial file `<file>.part` whatever its
+/// source. Take such a file over once, so an interrupted download still
+/// resumes after an update.
+async fn adopt_legacy_part(path: &Path, part: &Path) {
+    if fs::try_exists(part).await.unwrap_or(true) {
+        return;
+    }
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".part");
+    let _ = fs::rename(path.with_file_name(name), part).await;
+}
+
+/// Receives the file into `<target>.<tag>.part`, resuming if it already
+/// exists, and renames it once complete. Returns the final path.
 pub async fn receive(
     mut stream: TcpStream,
     target: PathBuf,
+    tag: u32,
     size: u64,
     mut progress: impl FnMut(u64),
 ) -> io::Result<PathBuf> {
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent).await?;
     }
-    let part = part_path(&target);
+    let part = part_path(&target, tag);
+    adopt_legacy_part(&target, &part).await;
     let file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -137,14 +180,12 @@ pub async fn receive(
     // Closing the connection tells the uploader we're done.
     drop(stream);
 
-    let target = unique_path(target).await;
-    fs::rename(&part, &target).await?;
-    Ok(target)
+    finish(&part, target).await
 }
 
 /// Size of a partial download, for resuming.
-pub async fn partial_size(target: &Path) -> u64 {
-    match File::open(part_path(target)).await {
+pub async fn partial_size(target: &Path, tag: u32) -> u64 {
+    match File::open(part_path(target, tag)).await {
         Ok(f) => f.metadata().await.map(|m| m.len()).unwrap_or(0),
         Err(_) => 0,
     }
@@ -154,6 +195,8 @@ pub async fn partial_size(target: &Path) -> u64 {
 mod tests {
     use super::*;
     use tokio::net::TcpListener;
+
+    const TAG: u32 = 7;
 
     #[test]
     fn local_paths_stay_inside_dir() {
@@ -198,13 +241,13 @@ mod tests {
 
         let (down, up) = pair().await;
         let (result, offset) = tokio::join!(
-            receive(down, target.clone(), data.len() as u64, |_| {}),
+            receive(down, target.clone(), TAG, data.len() as u64, |_| {}),
             upload(up, &data)
         );
         assert_eq!(offset, 0);
         assert_eq!(result.unwrap(), target);
         assert_eq!(std::fs::read(&target).unwrap(), data);
-        assert!(!part_path(&target).exists());
+        assert!(!part_path(&target, TAG).exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -214,17 +257,76 @@ mod tests {
         let target = dir.join("song.flac");
         let data: Vec<u8> = (0..100_000u32).map(|i| (i * 7) as u8).collect();
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(part_path(&target), &data[..40_000]).unwrap();
-        assert_eq!(partial_size(&target).await, 40_000);
+        std::fs::write(part_path(&target, TAG), &data[..40_000]).unwrap();
+        assert_eq!(partial_size(&target, TAG).await, 40_000);
 
         let (down, up) = pair().await;
         let (result, offset) = tokio::join!(
-            receive(down, target.clone(), data.len() as u64, |_| {}),
+            receive(down, target.clone(), TAG, data.len() as u64, |_| {}),
             upload(up, &data)
         );
         assert_eq!(offset, 40_000);
         result.unwrap();
         assert_eq!(std::fs::read(&target).unwrap(), data);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn source_tags_tell_users_and_paths_apart() {
+        let tag = source_tag("alice", "Music\\Album\\01.flac");
+        assert_eq!(tag, source_tag("alice", "Music\\Album\\01.flac"));
+        assert_ne!(tag, source_tag("carol", "Music\\Album\\01.flac"));
+        assert_ne!(tag, source_tag("alice", "Other\\Album\\01.flac"));
+        // Fixed value: a restart (or an update) has to find the same file.
+        assert_eq!(source_tag("alice", "x"), 0x5444_97e7);
+    }
+
+    #[tokio::test]
+    async fn sources_do_not_resume_each_others_data() {
+        let dir = temp_dir("sources");
+        let target = dir.join("song.flac");
+        let alice: Vec<u8> = (0..100_000u32).map(|i| (i * 7) as u8).collect();
+        let carol: Vec<u8> = alice.iter().map(|b| !b).collect();
+
+        // Alice's download is cut off part way.
+        let (down, mut up) = pair().await;
+        let cut = async move {
+            up.read_u64_le().await.unwrap();
+            up.write_all(&alice[..40_000]).await.unwrap();
+        };
+        let (result, ()) = tokio::join!(receive(down, target.clone(), 1, 100_000, |_| {}), cut);
+        assert!(result.is_err());
+
+        // Carol's file of the same name starts from the beginning.
+        let (down, up) = pair().await;
+        let (result, offset) = tokio::join!(
+            receive(down, target.clone(), 2, carol.len() as u64, |_| {}),
+            upload(up, &carol)
+        );
+        assert_eq!(offset, 0);
+        assert_eq!(std::fs::read(result.unwrap()).unwrap(), carol);
+        // Alice's partial data is still there for her to resume.
+        assert_eq!(partial_size(&target, 1).await, 40_000);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn part_file_of_an_older_version_is_resumed() {
+        let dir = temp_dir("legacy");
+        let target = dir.join("song.flac");
+        let data: Vec<u8> = (0..100_000u32).map(|i| (i * 7) as u8).collect();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("song.flac.part"), &data[..40_000]).unwrap();
+
+        let (down, up) = pair().await;
+        let (result, offset) = tokio::join!(
+            receive(down, target.clone(), TAG, data.len() as u64, |_| {}),
+            upload(up, &data)
+        );
+        assert_eq!(offset, 40_000);
+        result.unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), data);
+        assert!(!dir.join("song.flac.part").exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -237,9 +339,9 @@ mod tests {
             up.read_u64_le().await.unwrap();
             up.write_all(&[1; 1000]).await.unwrap();
         };
-        let (result, ()) = tokio::join!(receive(down, target.clone(), 5000, |_| {}), uploader);
+        let (result, ()) = tokio::join!(receive(down, target.clone(), TAG, 5000, |_| {}), uploader);
         assert_eq!(result.unwrap_err().kind(), io::ErrorKind::UnexpectedEof);
-        assert_eq!(partial_size(&target).await, 1000);
+        assert_eq!(partial_size(&target, TAG).await, 1000);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
@@ -248,10 +350,38 @@ mod tests {
         let dir = temp_dir("unique");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("song.flac"), b"old").unwrap();
-        assert_eq!(
-            unique_path(dir.join("song.flac")).await,
-            dir.join("song (1).flac")
-        );
+        std::fs::write(dir.join("song.flac.part"), b"new").unwrap();
+        let path = finish(&dir.join("song.flac.part"), dir.join("song.flac"))
+            .await
+            .unwrap();
+        assert_eq!(path, dir.join("song (1).flac"));
+        assert_eq!(std::fs::read(&path).unwrap(), b"new");
+        assert_eq!(std::fs::read(dir.join("song.flac")).unwrap(), b"old");
+        assert!(!dir.join("song.flac.part").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// Both downloads of one name finish at the same moment: neither may
+    /// replace the other.
+    #[tokio::test]
+    async fn simultaneous_finishes_keep_both_files() {
+        let dir = temp_dir("race");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut tasks = Vec::new();
+        for i in 0..8u8 {
+            let part = dir.join(format!("song.flac.{i}.part"));
+            std::fs::write(&part, [i]).unwrap();
+            let target = dir.join("song.flac");
+            tasks.push(tokio::spawn(
+                async move { finish(&part, target).await.unwrap() },
+            ));
+        }
+        let mut contents = Vec::new();
+        for t in tasks {
+            contents.push(std::fs::read(t.await.unwrap()).unwrap()[0]);
+        }
+        contents.sort_unstable();
+        assert_eq!(contents, (0..8).collect::<Vec<u8>>());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

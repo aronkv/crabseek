@@ -480,6 +480,76 @@ async fn upload_and_resume(name: &str, firewalled: &[&str]) {
     std::fs::remove_dir_all(root).unwrap();
 }
 
+/// Two users share a file under the same folder and name, and both
+/// downloads run at once. They must not write into one file.
+#[tokio::test]
+async fn same_file_name_from_two_users() {
+    let root = temp_dir("same-name");
+    let share = |who: &str, data: &[u8]| {
+        let dir = root.join(format!("{who}-Music"));
+        let album = dir.join("Artist").join("Album");
+        std::fs::create_dir_all(&album).unwrap();
+        std::fs::write(album.join("01 - Song.flac"), data).unwrap();
+        dir
+    };
+    let alice_data = song(6_000_000);
+    let carol_data: Vec<u8> = alice_data.iter().map(|b| !b).collect();
+    let alice_share = share("alice", &alice_data);
+    let carol_share = share("carol", &carol_data);
+    let remote = |dir: &Path| {
+        let root_name = dir.file_name().unwrap().to_string_lossy();
+        format!("{root_name}\\Artist\\Album\\01 - Song.flac")
+    };
+
+    let server = fake_server(&[]).await;
+    let (_alice, mut alice_events) = start(
+        &server,
+        "alice",
+        &root.join("alice-dl"),
+        vec![alice_share.clone()],
+    )
+    .await;
+    let (_carol, mut carol_events) = start(
+        &server,
+        "carol",
+        &root.join("carol-dl"),
+        vec![carol_share.clone()],
+    )
+    .await;
+    let (bob, mut bob_events) = start(&server, "bob", &root.join("bob-dl"), vec![]).await;
+    for events in [&mut alice_events, &mut carol_events] {
+        wait_for(events, |e| {
+            matches!(e, Event::SharesScanned { .. }).then_some(())
+        })
+        .await;
+    }
+
+    let from_alice = bob.download("alice", remote(&alice_share)).unwrap();
+    let from_carol = bob.download("carol", remote(&carol_share)).unwrap();
+
+    let mut paths = HashMap::new();
+    while paths.len() < 2 {
+        let (id, path) = wait_for(&mut bob_events, |e| match e {
+            Event::Download {
+                id,
+                state: DownloadState::Completed { path },
+                ..
+            } => Some((id, path)),
+            Event::Download {
+                state: DownloadState::Failed { reason },
+                ..
+            } => panic!("download failed: {reason}"),
+            _ => None,
+        })
+        .await;
+        paths.insert(id, path);
+    }
+    assert_ne!(paths[&from_alice], paths[&from_carol]);
+    assert_eq!(std::fs::read(&paths[&from_alice]).unwrap(), alice_data);
+    assert_eq!(std::fs::read(&paths[&from_carol]).unwrap(), carol_data);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[tokio::test]
 async fn unshared_file_is_denied() {
     let root = temp_dir("denied");
