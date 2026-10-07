@@ -1199,8 +1199,6 @@ fn render_buddies(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_stateful_widget(table, inner, &mut state);
 }
 
-/// Keys for the current tab and focus, the global ones first, so a
-/// narrow terminal cuts the least important.
 /// The first hints of `line` that fit in `width`, cut between two hints
 /// instead of in the middle of one.
 fn fit_hints(line: &str, width: usize) -> &str {
@@ -1215,6 +1213,8 @@ fn fit_hints(line: &str, width: usize) -> &str {
     &line[..end.unwrap_or(0)]
 }
 
+/// Keys for the current tab and focus, the global ones first, so a
+/// narrow terminal cuts the least important.
 fn help_line(app: &App) -> &'static str {
     match (app.tab, app.focus) {
         (Tab::Search, Focus::Input) => {
