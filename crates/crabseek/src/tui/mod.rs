@@ -402,6 +402,25 @@ mod tests {
         assert!(screen.contains("alice"));
     }
 
+    /// Eight numbered tabs need about 88 columns; below that the numbers
+    /// go (the keys still work) so every tab stays visible.
+    #[test]
+    fn every_tab_is_visible_at_80_columns() {
+        let mut app = app_with_results();
+        let wide = draw_at(&mut app, 110, 16);
+        assert!(wide.lines().next().unwrap().contains("8 Settings"));
+        for width in [72, 80, 87] {
+            let top = draw_at(&mut app, width, 16)
+                .lines()
+                .next()
+                .unwrap()
+                .to_owned();
+            for tab in Tab::ORDER {
+                assert!(top.contains(tab.label()), "{width} columns: {top}");
+            }
+        }
+    }
+
     #[test]
     fn search_results_stay_readable_at_80_columns() {
         let mut app = app_with_results();

@@ -67,7 +67,8 @@ pub fn render(frame: &mut Frame, app: &mut App) {
     } else {
         help_line(app).to_owned()
     };
-    help_spans.push(Span::raw(line).dark_gray());
+    let room = usize::from(help.width).saturating_sub(help_spans[0].width());
+    help_spans.push(Span::raw(fit_hints(&line, room).to_owned()).dark_gray());
     frame.render_widget(Paragraph::new(Line::from(help_spans)), help);
 
     if app.help {
@@ -84,26 +85,38 @@ fn render_header(frame: &mut Frame, app: &App, area: Rect) {
             label.to_owned()
         })
     };
-    let titles: Vec<Line> = Tab::ORDER
-        .iter()
-        .enumerate()
-        .map(|(i, tab)| {
-            let label = format!("{} {}", i + 1, tab.label());
-            match tab {
-                Tab::Transfers => counted(&label, app.transfers.active()),
-                Tab::Uploads => counted(&label, app.uploads.active()),
-                Tab::Buddies => counted(&label, app.buddies.online()),
-                Tab::Chat => counted(&label, app.chats.total_unread()),
-                Tab::Wishlist => match app.wishlist.total_new() {
-                    0 => Line::from(label),
-                    n => Line::from(format!("{label} ({n} new)")),
-                },
-                _ => Line::from(label),
-            }
-        })
-        .collect();
+    let make_titles = |numbered: bool| -> Vec<Line> {
+        Tab::ORDER
+            .iter()
+            .enumerate()
+            .map(|(i, tab)| {
+                let label = if numbered {
+                    format!("{} {}", i + 1, tab.label())
+                } else {
+                    tab.label().to_owned()
+                };
+                match tab {
+                    Tab::Transfers => counted(&label, app.transfers.active()),
+                    Tab::Uploads => counted(&label, app.uploads.active()),
+                    Tab::Buddies => counted(&label, app.buddies.online()),
+                    Tab::Chat => counted(&label, app.chats.total_unread()),
+                    Tab::Wishlist => match app.wishlist.total_new() {
+                        0 => Line::from(label),
+                        n => Line::from(format!("{label} ({n} new)")),
+                    },
+                    _ => Line::from(label),
+                }
+            })
+            .collect()
+    };
+    let width_of = |titles: &[Line]| -> u16 { titles.iter().map(|t| t.width() as u16 + 2).sum() };
+    // Too wide for the terminal: the numbers go first (the keys still work).
+    let mut titles = make_titles(true);
+    if width_of(&titles) > area.width {
+        titles = make_titles(false);
+    }
     let selected = app.tab.index();
-    let tabs_width: u16 = titles.iter().map(|t| t.width() as u16 + 2).sum();
+    let tabs_width = width_of(&titles);
     frame.render_widget(
         Tabs::new(titles)
             .select(selected)
@@ -1188,6 +1201,20 @@ fn render_buddies(frame: &mut Frame, app: &mut App, area: Rect) {
 
 /// Keys for the current tab and focus, the global ones first, so a
 /// narrow terminal cuts the least important.
+/// The first hints of `line` that fit in `width`, cut between two hints
+/// instead of in the middle of one.
+fn fit_hints(line: &str, width: usize) -> &str {
+    if line.width() <= width {
+        return line;
+    }
+    let end = line
+        .match_indices(" ·")
+        .map(|(i, _)| i)
+        .take_while(|&i| line[..i].width() <= width)
+        .last();
+    &line[..end.unwrap_or(0)]
+}
+
 fn help_line(app: &App) -> &'static str {
     match (app.tab, app.focus) {
         (Tab::Search, Focus::Input) => {
@@ -1543,6 +1570,17 @@ fn last_components(path: &str, n: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hints_are_cut_between_items() {
+        let line = " q quit · 1-8 tabs · j/k move";
+        assert_eq!(fit_hints(line, 80), line);
+        assert_eq!(fit_hints(line, 29), line);
+        assert_eq!(fit_hints(line, 28), " q quit · 1-8 tabs");
+        assert_eq!(fit_hints(line, 18), " q quit · 1-8 tabs");
+        assert_eq!(fit_hints(line, 17), " q quit");
+        assert_eq!(fit_hints(line, 3), "");
+    }
+
     use super::*;
 
     #[test]
