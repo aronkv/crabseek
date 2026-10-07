@@ -2,7 +2,7 @@
 
 # crabseek
 
-<img src="showcase.gif" alt="Gif" width="500" />
+<img src="showcase.gif" alt="Gif" width="1000" />
 
 **A fast, keyboard-driven [Soulseek](https://www.slsknet.org/) client for the terminal, written in Rust.**
 
