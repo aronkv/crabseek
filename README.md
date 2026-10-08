@@ -7,6 +7,7 @@
     <a href="https://github.com/aronkv/crabseek/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/aronkv/crabseek/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status" /></a>
     <a href="https://github.com/aronkv/crabseek/releases"><img src="https://img.shields.io/github/v/release/aronkv/crabseek?style=flat-square" alt="Latest release" /></a>
     <a href="./LICENSE"><img src="https://img.shields.io/github/license/aronkv/crabseek?style=flat-square" alt="MIT license" /></a>
+    <img src="https://img.shields.io/github/languages/top/aronkv/crabseek?logo=rust&logoColor=white&style=flat-square" alt="Top language" />
     <img src="https://img.shields.io/badge/Rust-1.88%2B-orange?logo=rust&logoColor=white&style=flat-square" alt="Rust 1.88+" />
   </p>
 
