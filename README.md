@@ -8,7 +8,6 @@
     <a href="https://github.com/aronkv/crabseek/releases"><img src="https://img.shields.io/github/v/release/aronkv/crabseek?style=flat-square" alt="Latest release" /></a>
     <a href="./LICENSE"><img src="https://img.shields.io/github/license/aronkv/crabseek?style=flat-square" alt="MIT license" /></a>
     <img src="https://img.shields.io/github/languages/top/aronkv/crabseek?logo=rust&logoColor=white&style=flat-square" alt="Top language" />
-    <a href="https://github.com/aronkv/crabseek/graphs/contributors"><img src="https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fapi.github.com%2Frepos%2Faronkv%2Fcrabseek%2Fcontributors&query=%24%5B0%5D.login&label=top%20contributor&logo=github&style=flat-square" alt="Top contributor" /></a>
   </p>
 
   <p>
