@@ -131,10 +131,16 @@ impl Actor {
         }
     }
 
+    /// A finished download is reported once more and then forgotten:
+    /// nothing asks about it again, and lookups by file name scan them all.
     fn set_state(&mut self, id: DownloadId, state: DownloadState) {
+        let finished = state.is_finished();
         if let Some(d) = self.downloads.get_mut(&id) {
             d.state = state;
             self.emit_download(id);
+            if finished {
+                self.downloads.remove(&id);
+            }
         }
     }
 
