@@ -1,6 +1,7 @@
 //! The download list shown on the Transfers tab.
 
-use std::collections::HashSet;
+use std::cell::OnceCell;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use crabseek_net::{DownloadId, DownloadState};
@@ -133,6 +134,12 @@ pub struct Summary {
 pub struct Transfers {
     /// In the order they were queued.
     pub list: Vec<Transfer>,
+    /// Position in `list` by download id; progress updates are frequent.
+    index: HashMap<DownloadId, usize>,
+    /// The rows shown, kept until downloads come or go or headings open
+    /// or close: sorting on every draw and cursor move was slow for long
+    /// lists.
+    rows: OnceCell<Vec<TransferRow>>,
     /// Indices into `list`, so the cursor stays on its row when others
     /// arrive.
     cursor: TransferRow,
@@ -159,8 +166,9 @@ impl Transfers {
         if self.removed.contains(&id) {
             return;
         }
-        let t = match self.list.iter_mut().find(|t| t.id == id) {
-            Some(t) => {
+        let t = match self.index.get(&id) {
+            Some(&i) => {
+                let t = &mut self.list[i];
                 if std::mem::discriminant(&t.state) != std::mem::discriminant(&state) {
                     self.dirty = true;
                 }
@@ -168,6 +176,8 @@ impl Transfers {
             }
             None => {
                 self.dirty = true;
+                self.index.insert(id, self.list.len());
+                self.rows.take();
                 self.list.push(Transfer {
                     id,
                     username,
@@ -218,6 +228,7 @@ impl Transfers {
 
     pub fn set_flat(&mut self, flat: bool) {
         self.flat = flat;
+        self.rows.take();
         self.fix_cursor();
     }
 
@@ -243,7 +254,11 @@ impl Transfers {
     }
 
     /// The lines to show: headings, and the files of open folders.
-    pub fn rows(&self) -> Vec<TransferRow> {
+    pub fn rows(&self) -> &[TransferRow] {
+        self.rows.get_or_init(|| self.build_rows())
+    }
+
+    fn build_rows(&self) -> Vec<TransferRow> {
         let order = self.order();
         if self.flat {
             return order.into_iter().map(TransferRow::Transfer).collect();
@@ -313,6 +328,7 @@ impl Transfers {
             }
             TransferRow::Transfer(_) => return,
         }
+        self.rows.take();
         self.fix_cursor();
     }
 
@@ -385,6 +401,7 @@ impl Transfers {
         self.list.retain(|t| t.id != id);
         self.removed.insert(id);
         self.dirty = true;
+        self.reindex();
         self.forget_closed();
         self.select_at(pos);
     }
@@ -394,9 +411,21 @@ impl Transfers {
         let before = self.list.len();
         self.list.retain(|t| !t.is_finished());
         self.dirty = true;
+        self.reindex();
         self.forget_closed();
         self.select_at(pos);
         before - self.list.len()
+    }
+
+    /// Rebuilds the id index after downloads left the list.
+    fn reindex(&mut self) {
+        self.index = self
+            .list
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (t.id, i))
+            .collect();
+        self.rows.take();
     }
 
     /// Drops closed headings that have no downloads left, so the same
@@ -518,6 +547,33 @@ mod tests {
 
     fn queued() -> DownloadState {
         DownloadState::Queued { place: None }
+    }
+
+    #[test]
+    fn rows_follow_downloads_coming_and_going() {
+        let mut t = Transfers::default();
+        t.set_flat(true);
+        t.update(1, "u".into(), "a\\1.flac".into(), queued());
+        assert_eq!(t.rows(), [TransferRow::Transfer(0)]);
+        t.update(2, "u".into(), "a\\2.flac".into(), queued());
+        t.update(3, "u".into(), "a\\3.flac".into(), queued());
+        assert_eq!(t.rows().len(), 3);
+        t.remove(1);
+        assert_eq!(
+            t.rows(),
+            [TransferRow::Transfer(0), TransferRow::Transfer(1)]
+        );
+        // Updates find their download at its new position.
+        t.update(
+            3,
+            "u".into(),
+            "a\\3.flac".into(),
+            DownloadState::Failed { reason: "x".into() },
+        );
+        assert!(t.list[1].is_finished() && !t.list[0].is_finished());
+        assert_eq!(t.clear_finished(), 1);
+        assert_eq!(t.rows(), [TransferRow::Transfer(0)]);
+        assert_eq!(t.list[0].id, 2);
     }
 
     #[test]
