@@ -1339,4 +1339,36 @@ mod tests {
         app.on_key(KeyEvent::from(KeyCode::Char('b')));
         assert_eq!(app.browse_focus, Focus::Input);
     }
+
+    #[test]
+    fn failed_saves_are_retried() {
+        let dir = std::env::temp_dir().join(format!("crabseek-persist-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A file where the save folder should be makes every save fail.
+        let blocked = dir.join("blocked");
+        std::fs::write(&blocked, "").unwrap();
+        let (downloads, chats) = (blocked.join("downloads.json"), blocked.join("chats.json"));
+        let mut app = App::new(
+            Client::offline(),
+            "me".into(),
+            &Config::default(),
+            vec![],
+            Some(downloads.clone()),
+        )
+        .unwrap()
+        .with_chats(vec![], Some(chats.clone()));
+        app.chats.dirty = true;
+        app.transfers.dirty = true;
+
+        app.persist();
+        assert!(app.chats.dirty && app.transfers.dirty);
+        assert!(app.status_error.is_some());
+
+        std::fs::remove_file(&blocked).unwrap();
+        app.persist();
+        assert!(!app.chats.dirty && !app.transfers.dirty);
+        assert!(downloads.exists() && chats.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

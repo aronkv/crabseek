@@ -441,24 +441,28 @@ impl App {
         }
     }
 
-    /// Saves the download list if it changed.
+    /// Saves the chats and the download list if they changed. What could
+    /// not be saved stays changed and is tried again next time.
     pub fn persist(&mut self) {
         if self.chats.dirty {
-            self.chats.dirty = false;
-            if let Some(path) = &self.chats_path
-                && let Err(e) = chat::save(path, &self.chats.list)
-            {
-                self.fail(format!("could not save the chats: {e:#}"));
+            let saved = match &self.chats_path {
+                Some(path) => chat::save(path, &self.chats.list),
+                None => Ok(()),
+            };
+            match saved {
+                Ok(()) => self.chats.dirty = false,
+                Err(e) => self.fail(format!("could not save the chats: {e:#}")),
             }
         }
-        if !self.transfers.dirty {
-            return;
-        }
-        self.transfers.dirty = false;
-        if let Some(path) = &self.downloads_path
-            && let Err(e) = persist::save(path, &self.transfers.snapshot())
-        {
-            self.fail(format!("could not save the download list: {e:#}"));
+        if self.transfers.dirty {
+            let saved = match &self.downloads_path {
+                Some(path) => persist::save(path, &self.transfers.snapshot()),
+                None => Ok(()),
+            };
+            match saved {
+                Ok(()) => self.transfers.dirty = false,
+                Err(e) => self.fail(format!("could not save the download list: {e:#}")),
+            }
         }
     }
 
