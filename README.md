@@ -1,7 +1,7 @@
 <div align="center">
   <h1>crabseek</h1>
 
-  <p>A Soulseek client for the terminal, written in Rust.</p>
+  <p>A Soulseek client for the terminal, that can probably run on your toaster, written in Rust.</p>
 
   <p>
     <a href="https://github.com/aronkv/crabseek/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/aronkv/crabseek/ci.yml?branch=main&style=flat-square&label=CI" alt="CI status" /></a>
