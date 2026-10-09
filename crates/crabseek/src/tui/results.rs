@@ -2,7 +2,7 @@
 //! the folder is expanded. The cursor follows its row when results get
 //! re-sorted as new ones arrive.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crabseek_proto::search::{SearchFile, SearchResponse};
 
@@ -196,6 +196,10 @@ pub enum Row {
 pub struct Results {
     /// Indexed by `FolderId`; never reordered.
     folders: Vec<Folder>,
+    /// Folder ids by username and folder path, so a user answering again
+    /// (wishlist runs repeat) adds to their folders instead of repeating
+    /// them.
+    by_user: HashMap<String, HashMap<String, FolderId>>,
     /// Display order of folder ids.
     order: Vec<FolderId>,
     expanded: HashSet<FolderId>,
@@ -224,12 +228,19 @@ impl Results {
         if resp.files.is_empty() {
             return;
         }
-        self.users += 1;
+        if !self.by_user.contains_key(&resp.username) {
+            self.users += 1;
+        }
         let mut by_folder: BTreeMap<String, Vec<SearchFile>> = BTreeMap::new();
         for f in resp.files {
             by_folder.entry(f.folder().to_owned()).or_default().push(f);
         }
         for (path, mut files) in by_folder {
+            let known = self.by_user.get(&resp.username).and_then(|f| f.get(&path));
+            if let Some(&id) = known {
+                self.merge(id, files);
+                continue;
+            }
             files.sort_by(|a, b| a.filename.cmp(&b.filename));
             self.folders.push(Folder {
                 username: resp.username.clone(),
@@ -240,6 +251,10 @@ impl Results {
                 queue_length: resp.queue_length,
             });
             let id = self.folders.len() - 1;
+            self.by_user
+                .entry(resp.username.clone())
+                .or_default()
+                .insert(self.folders[id].path.clone(), id);
             // Insert in place instead of re-sorting everything per response.
             let folders = &self.folders;
             let pos = self
@@ -253,6 +268,31 @@ impl Results {
         if self.selected.is_none() {
             self.selected = Some(Row::Folder(self.order[0]));
         }
+    }
+
+    /// Adds the files of `files` that folder `id` does not list yet.
+    fn merge(&mut self, id: FolderId, mut files: Vec<SearchFile>) {
+        let folder = &self.folders[id];
+        files.retain(|f| !folder.files.iter().any(|g| g.filename == f.filename));
+        if files.is_empty() {
+            return;
+        }
+        // Keep the cursor on its file, whose index may shift.
+        let selected_file = match self.selected {
+            Some(Row::File(sel, i)) if sel == id => Some(folder.files[i].filename.clone()),
+            _ => None,
+        };
+        let shown_before = self.shown_in(folder);
+        self.file_count += files.len();
+        let folder = &mut self.folders[id];
+        folder.files.extend(files);
+        folder.files.sort_by(|a, b| a.filename.cmp(&b.filename));
+        if let Some(name) = selected_file {
+            let i = folder.files.iter().position(|f| f.filename == name);
+            self.selected = i.map(|i| Row::File(id, i));
+        }
+        self.shown_files = self.shown_files - shown_before + self.shown_in(&self.folders[id]);
+        self.rows_dirty = true;
     }
 
     pub fn folder(&self, id: FolderId) -> &Folder {
@@ -481,6 +521,42 @@ mod tests {
         assert_eq!(folder_users(&mut r), ["fast", "fast", "slow", "busy"]);
         assert_eq!(r.users, 3);
         assert_eq!(r.file_count(), 5);
+    }
+
+    #[test]
+    fn repeated_answers_merge_into_their_folders() {
+        let mut r = Results::default();
+        r.add(response(
+            "u",
+            true,
+            1,
+            vec![file("a\\2.mp3", vec![]), file("a\\3.mp3", vec![])],
+        ));
+        r.toggle();
+        r.move_by(1);
+        assert_eq!(r.selection_files()[0].1, "a\\2.mp3");
+
+        // The same album again with one new track, sorting first.
+        r.add(response(
+            "u",
+            true,
+            1,
+            vec![
+                file("a\\1.mp3", vec![]),
+                file("a\\2.mp3", vec![]),
+                file("a\\3.mp3", vec![]),
+            ],
+        ));
+        assert_eq!(r.folder_count(), 1);
+        assert_eq!(r.users, 1);
+        assert_eq!(r.file_count(), 3);
+        assert_eq!(r.shown_file_count(), 3);
+        assert_eq!(r.rows().len(), 4);
+        assert_eq!(
+            r.selection_files()[0].1,
+            "a\\2.mp3",
+            "cursor stays on its file"
+        );
     }
 
     #[test]

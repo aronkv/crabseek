@@ -228,6 +228,9 @@ mod tests {
         );
         assert_eq!(w.total_new(), 3);
         assert_eq!(w.on_result(resp(99, "u", &["x"])), None);
+        // The repeat adds to the album row instead of listing it twice.
+        let results = &w.items[0].results;
+        assert_eq!((results.folder_count(), results.file_count()), (1, 3));
     }
 
     #[test]
