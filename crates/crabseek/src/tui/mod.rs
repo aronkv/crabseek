@@ -34,12 +34,17 @@ use login::{LoginAction, LoginForm};
 /// Redraw at least this often so timers and speeds stay current.
 const TICK: Duration = Duration::from_millis(500);
 
+/// Background events are drawn at most this often, so a stream of
+/// progress updates and search results does not redraw for each one.
+/// Keys are drawn at once.
+const FRAME: Duration = Duration::from_millis(33);
+
 /// Changed lists are saved at most this often. Each save syncs the file
 /// to disk on the UI task, which a slow disk would feel on every key; a
 /// crash loses at most this much. Quitting saves at once.
 const SAVE_EVERY: Duration = Duration::from_secs(5);
 
-/// Events handled per redraw at most, so a flood of search results cannot
+/// Events handled in one go at most, so a flood of search results cannot
 /// hold back drawing and keys. The rest wait for the next pass.
 const MAX_EVENTS_PER_DRAW: usize = 500;
 
@@ -243,27 +248,40 @@ where
     let mut tick = tokio::time::interval(TICK);
     let mut last_save = Instant::now();
     let mut client_alive = true;
+    let mut changed = true;
+    let mut next_frame = tokio::time::Instant::now();
 
     while !app.quit {
-        terminal.draw(|frame| ui::render(frame, &mut app))?;
+        if changed && tokio::time::Instant::now() >= next_frame {
+            terminal.draw(|frame| ui::render(frame, &mut app))?;
+            changed = false;
+            next_frame = tokio::time::Instant::now() + FRAME;
+        }
         tokio::select! {
-            next = next_input(input) => match next? {
-                Next::Key(key) => {
-                    app.on_key(key);
-                    if app.detach {
-                        app.detach = false;
-                        host.detach();
+            next = next_input(input) => {
+                match next? {
+                    Next::Key(key) => {
+                        app.on_key(key);
+                        if app.detach {
+                            app.detach = false;
+                            host.detach();
+                        }
                     }
+                    Next::Redraw => terminal.clear()?,
+                    Next::End => break,
                 }
-                Next::Redraw => terminal.clear()?,
-                Next::End => break,
+                changed = true;
+                next_frame = tokio::time::Instant::now();
             },
-            event = events.recv(), if client_alive => match event {
-                Some(event) => {
-                    app.on_event(event);
-                    drain_burst(&mut app, &mut events);
+            event = events.recv(), if client_alive => {
+                match event {
+                    Some(event) => {
+                        app.on_event(event);
+                        drain_burst(&mut app, &mut events);
+                    }
+                    None => client_alive = false,
                 }
-                None => client_alive = false,
+                changed = true;
             },
             _ = tick.tick() => {
                 app.tick();
@@ -271,7 +289,9 @@ where
                     app.persist();
                     last_save = Instant::now();
                 }
+                changed = true;
             }
+            _ = tokio::time::sleep_until(next_frame), if changed => {}
         }
     }
     app.persist();
