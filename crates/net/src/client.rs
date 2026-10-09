@@ -260,6 +260,7 @@ impl Client {
                 upload_speed: 0,
                 distrib: Distrib::default(),
                 portmap_task: None,
+                mapped_port: None,
                 pierces: 0,
                 searches_in_flight: 0,
             }
@@ -667,6 +668,10 @@ struct Actor {
     distrib: Distrib,
     /// Keeps the UPnP mapping renewed while UPnP is on.
     portmap_task: Option<tokio::task::AbortHandle>,
+    /// The port of the router rule we created, removed again when UPnP is
+    /// turned off or the port changes. A rule that already existed (e.g. a
+    /// manual forward) is not ours and stays.
+    mapped_port: Option<u16>,
     /// Indirect connection attempts in flight (see [`MAX_PIERCES`]).
     pierces: usize,
     /// Share searches in flight (see [`MAX_SEARCHES_IN_FLIGHT`]).
@@ -702,10 +707,7 @@ impl Actor {
                 Internal::SetDownloadDir(dir) => self.download_dir = dir,
                 Internal::SetListenPort(port) => self.set_listen_port(port).await,
                 Internal::SetUpnp(enabled) => self.set_upnp(enabled),
-                Internal::PortMapped(result) => self.emit(Event::PortMap(match result {
-                    Ok(mapping) => PortMapStatus::Mapped(mapping),
-                    Err(e) => PortMapStatus::Failed(e),
-                })),
+                Internal::PortMapped(result) => self.on_port_mapped(result),
                 Internal::Ping => {
                     self.retired
                         .retain(|(since, _)| since.elapsed() < RETIRED_KEEP);
@@ -812,10 +814,7 @@ impl Actor {
     async fn set_listen_port(&mut self, port: u16) {
         let result = match TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).await {
             Ok(listener) => {
-                if self.portmap_task.is_some() {
-                    let old = self.listen_port;
-                    tokio::spawn(portmap::unmap(old));
-                }
+                self.unmap_own();
                 self.listen_port = port;
                 self.accept_task.abort();
                 self.accept_task =
@@ -838,7 +837,7 @@ impl Actor {
             task.abort();
         }
         if !enabled {
-            tokio::spawn(portmap::unmap(self.listen_port));
+            self.unmap_own();
             self.emit(Event::PortMap(PortMapStatus::Disabled));
             return;
         }
@@ -859,6 +858,30 @@ impl Actor {
             })
             .abort_handle(),
         );
+    }
+
+    fn on_port_mapped(&mut self, result: Result<portmap::PortMapping, String>) {
+        if let Ok(mapping) = &result
+            && !mapping.already_mapped
+        {
+            if self.portmap_task.is_none() || mapping.port != self.listen_port {
+                // Mapped just as UPnP went off or the port changed.
+                tokio::spawn(portmap::unmap(mapping.port));
+                return;
+            }
+            self.mapped_port = Some(mapping.port);
+        }
+        self.emit(Event::PortMap(match result {
+            Ok(mapping) => PortMapStatus::Mapped(mapping),
+            Err(e) => PortMapStatus::Failed(e),
+        }));
+    }
+
+    /// Removes the router rule we created, if any.
+    fn unmap_own(&mut self) {
+        if let Some(port) = self.mapped_port.take() {
+            tokio::spawn(portmap::unmap(port));
+        }
     }
 
     fn emit(&self, event: Event) {
