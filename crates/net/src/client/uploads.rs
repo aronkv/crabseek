@@ -14,7 +14,7 @@ use crabseek_proto::ConnectionType;
 use crabseek_proto::peer::{PeerMsg, TransferDirection};
 use crabseek_proto::server::ServerRequest;
 use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::task::AbortHandle;
 
@@ -28,6 +28,9 @@ const RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
 const OFFSET_TIMEOUT: Duration = Duration::from_secs(30);
 /// How long we wait for the downloader to close after the last byte.
 const CLOSE_TIMEOUT: Duration = Duration::from_secs(30);
+/// How long the downloader may take nothing before the upload fails, so a
+/// peer that stops reading does not hold a slot forever.
+const STALL_TIMEOUT: Duration = Duration::from_secs(60);
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(250);
 const NOT_SHARED: &str = "File not shared.";
 
@@ -441,7 +444,7 @@ async fn send_file(
             ));
         }
         let n = n.min((size - sent) as usize);
-        stream.write_all(&buf[..n]).await?;
+        write_all_or_stall(&mut stream, &buf[..n], STALL_TIMEOUT).await?;
         sent += n as u64;
         if last_report.elapsed() >= PROGRESS_INTERVAL {
             progress(sent);
@@ -454,6 +457,25 @@ async fn send_file(
     let mut rest = [0; 64];
     let _ = tokio::time::timeout(CLOSE_TIMEOUT, stream.read(&mut rest)).await;
     Ok((sent - offset, started.elapsed()))
+}
+
+/// Like `write_all`, but fails if the peer takes nothing for `stall`.
+/// Slow peers are fine as long as they keep reading.
+async fn write_all_or_stall(
+    w: &mut (impl AsyncWrite + Unpin),
+    mut data: &[u8],
+    stall: Duration,
+) -> io::Result<()> {
+    while !data.is_empty() {
+        let n = tokio::time::timeout(stall, w.write(data))
+            .await
+            .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "peer stopped reading"))??;
+        if n == 0 {
+            return Err(io::ErrorKind::WriteZero.into());
+        }
+        data = &data[n..];
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -487,5 +509,26 @@ mod tests {
         assert_eq!(got, data[50_000..]);
         assert_eq!(result.unwrap().0, 150_000);
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[tokio::test]
+    async fn stalled_reader_times_out() {
+        let (mut w, mut r) = tokio::io::duplex(1024);
+        let data = vec![7; 4096];
+        // A reader that keeps up gets everything.
+        let (written, read) = tokio::join!(
+            write_all_or_stall(&mut w, &data, Duration::from_secs(5)),
+            async {
+                let mut got = vec![0; data.len()];
+                r.read_exact(&mut got).await.map(|_| got)
+            }
+        );
+        written.unwrap();
+        assert_eq!(read.unwrap(), data);
+        // One that stops reading fails the write instead of blocking it.
+        let err = write_all_or_stall(&mut w, &data, Duration::from_millis(50))
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
     }
 }
