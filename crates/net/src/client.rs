@@ -253,6 +253,7 @@ impl Client {
                 shares: Arc::new(ShareIndex::default()),
                 shared_dirs: cfg.shared_dirs,
                 share_cache: cfg.share_cache,
+                shares_scan: 0,
                 uploads: BTreeMap::new(),
                 next_upload_id: 0,
                 upload_slots: cfg.upload_slots.max(1),
@@ -511,6 +512,7 @@ pub(crate) enum Internal {
     Ping,
     RescanShares(Vec<PathBuf>),
     SharesScanned {
+        scan: u64,
         index: ShareIndex,
         errors: Vec<String>,
     },
@@ -654,6 +656,8 @@ struct Actor {
     shares: Arc<ShareIndex>,
     shared_dirs: Vec<PathBuf>,
     share_cache: Option<PathBuf>,
+    /// The latest share scan; results of older ones are dropped.
+    shares_scan: u64,
     /// In queue order.
     uploads: BTreeMap<UploadId, Upload>,
     next_upload_id: UploadId,
@@ -708,9 +712,11 @@ impl Actor {
                     self.send_server(ServerRequest::Ping).await
                 }
                 Internal::RescanShares(dirs) => self.rescan_shares(dirs),
-                Internal::SharesScanned { index, errors } => {
-                    self.on_shares_scanned(index, errors).await
-                }
+                Internal::SharesScanned {
+                    scan,
+                    index,
+                    errors,
+                } => self.on_shares_scanned(scan, index, errors).await,
                 Internal::SearchDone {
                     username,
                     token,

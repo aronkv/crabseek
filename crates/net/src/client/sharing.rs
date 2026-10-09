@@ -17,6 +17,8 @@ impl Actor {
     /// as [`Internal::SharesScanned`].
     pub(super) fn rescan_shares(&mut self, dirs: Vec<PathBuf>) {
         self.shared_dirs = dirs.clone();
+        self.shares_scan += 1;
+        let scan = self.shares_scan;
         let cache_path = self.share_cache.clone();
         let tx = self.internal.clone();
         tokio::task::spawn_blocking(move || {
@@ -31,6 +33,7 @@ impl Actor {
                 tracing::warn!(%e, "could not save the share cache");
             }
             let _ = tx.send(Internal::SharesScanned {
+                scan,
                 index: report.index,
                 errors: report.errors,
             });
@@ -38,7 +41,17 @@ impl Actor {
         self.emit(Event::SharesScanning);
     }
 
-    pub(super) async fn on_shares_scanned(&mut self, index: ShareIndex, errors: Vec<String>) {
+    pub(super) async fn on_shares_scanned(
+        &mut self,
+        scan: u64,
+        index: ShareIndex,
+        errors: Vec<String>,
+    ) {
+        // Scans can overlap, and a slow older one must not bring back
+        // folders that are no longer shared.
+        if scan != self.shares_scan {
+            return;
+        }
         let (folders, files) = (index.folder_count(), index.file_count());
         self.shares = Arc::new(index);
         self.send_server(ServerRequest::SharedFoldersFiles {
