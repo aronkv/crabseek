@@ -12,13 +12,14 @@ const BATCH_WINDOW: Duration = Duration::from_secs(3);
 /// Shows a notification without blocking the UI. Failures (no
 /// notification daemon, no session bus) only go to the log.
 pub fn send(summary: String, body: String) {
-    tokio::task::spawn_blocking(move || {
+    tokio::spawn(async move {
         let result = notify_rust::Notification::new()
             .appname("crabseek")
             .summary(&summary)
             .body(&body)
             .icon("folder-download")
-            .show();
+            .show_async()
+            .await;
         if let Err(e) = result {
             tracing::info!(%e, "desktop notification failed");
         }
@@ -90,15 +91,16 @@ mod tests {
 /// Shows a real notification; run with `--ignored` on a desktop session.
 #[cfg(test)]
 mod live {
-    #[test]
+    #[tokio::test]
     #[ignore]
-    fn shows_on_the_desktop() {
+    async fn shows_on_the_desktop() {
         notify_rust::Notification::new()
             .appname("crabseek")
             .summary("crabseek")
             .body("Test notification: desktop notifications work")
             .icon("folder-download")
-            .show()
+            .show_async()
+            .await
             .expect("notification daemon reachable");
     }
 }
