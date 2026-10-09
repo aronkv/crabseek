@@ -680,6 +680,10 @@ mod tests {
         assert!(screen.contains("50%"));
         assert!(screen.contains("done"));
         assert!(screen.contains("2 Downloads (1)"));
+        assert!(screen.contains("now · peak"), "speed graph shown");
+
+        app.settings.speed_graph = false;
+        assert!(!draw(&mut app).contains("now · peak"));
     }
 
     #[test]

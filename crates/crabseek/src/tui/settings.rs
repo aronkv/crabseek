@@ -16,6 +16,7 @@ pub enum Item {
     Upnp,
     Notifications,
     Background,
+    SpeedGraph,
     Shared(usize),
     AddShared,
 }
@@ -35,6 +36,7 @@ pub enum SettingsAction {
     SetUpnp(bool),
     SetNotifications(bool),
     SetBackground(bool),
+    SetSpeedGraph(bool),
     SetSharedDirs(Vec<PathBuf>),
 }
 
@@ -46,6 +48,8 @@ pub struct Settings {
     pub notifications: bool,
     /// Background mode; set by the app from the config.
     pub background: bool,
+    /// The Downloads tab's speed graph; set by the app from the config.
+    pub speed_graph: bool,
     pub shared: Vec<PathBuf>,
     pub selected: usize,
     pub edit: Option<Edit>,
@@ -60,6 +64,7 @@ impl Settings {
             upnp,
             notifications: false,
             background: false,
+            speed_graph: true,
             shared,
             selected: 0,
             edit: None,
@@ -74,15 +79,17 @@ impl Settings {
             Item::Upnp,
             Item::Notifications,
             Item::Background,
+            Item::SpeedGraph,
         ];
         items.extend((0..self.shared.len()).map(Item::Shared));
         items.push(Item::AddShared);
         items
     }
 
-    /// Row index of the shared folder `i`.
-    fn shared_index(i: usize) -> usize {
-        i + 5
+    /// Row index of the shared folder `i`; with `i` past the last one,
+    /// the row for adding a folder.
+    pub fn shared_index(i: usize) -> usize {
+        i + 6
     }
 
     fn selected_item(&self) -> Item {
@@ -122,6 +129,12 @@ impl Settings {
                 self.background = !self.background;
                 return SettingsAction::SetBackground(self.background);
             }
+            KeyCode::Enter | KeyCode::Char('e' | ' ')
+                if self.selected_item() == Item::SpeedGraph =>
+            {
+                self.speed_graph = !self.speed_graph;
+                return SettingsAction::SetSpeedGraph(self.speed_graph);
+            }
             KeyCode::Enter | KeyCode::Char('e') => self.start_edit(self.selected_item()),
             KeyCode::Char('a') => {
                 self.selected = count - 1;
@@ -143,7 +156,7 @@ impl Settings {
         let text = match item {
             Item::DownloadDir => display_path(&self.download_dir),
             Item::ListenPort => self.listen_port.to_string(),
-            Item::Upnp | Item::Notifications | Item::Background => return,
+            Item::Upnp | Item::Notifications | Item::Background | Item::SpeedGraph => return,
             Item::Shared(i) => display_path(&self.shared[i]),
             Item::AddShared => "~/".to_owned(),
         };
@@ -211,7 +224,11 @@ impl Settings {
                 self.download_dir = path.clone();
                 SettingsAction::SetDownloadDir(path)
             }
-            Item::ListenPort | Item::Upnp | Item::Notifications | Item::Background => {
+            Item::ListenPort
+            | Item::Upnp
+            | Item::Notifications
+            | Item::Background
+            | Item::SpeedGraph => {
                 unreachable!("handled above")
             }
             item @ (Item::Shared(_) | Item::AddShared) => {
@@ -369,7 +386,7 @@ mod tests {
         assert_eq!(s.on_key(key(KeyCode::Enter)), SettingsAction::None);
         s.on_key(key(KeyCode::Esc));
 
-        s.selected = 5;
+        s.selected = Settings::shared_index(0);
         assert_eq!(
             s.on_key(key(KeyCode::Char('x'))),
             SettingsAction::SetSharedDirs(vec![])
@@ -388,6 +405,20 @@ mod tests {
         assert_eq!(
             s.on_key(key(KeyCode::Enter)),
             SettingsAction::SetNotifications(false)
+        );
+    }
+
+    #[test]
+    fn speed_graph_toggle() {
+        let mut s = Settings::new(PathBuf::from("/dl"), 2234, true, vec![]);
+        s.selected = 5;
+        assert_eq!(
+            s.on_key(key(KeyCode::Enter)),
+            SettingsAction::SetSpeedGraph(false)
+        );
+        assert_eq!(
+            s.on_key(key(KeyCode::Char(' '))),
+            SettingsAction::SetSpeedGraph(true)
         );
     }
 

@@ -7,15 +7,18 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Position, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Cell, Paragraph, Row as TableRow, Table, TableState, Tabs, Wrap};
+use ratatui::widgets::{
+    Block, Cell, Paragraph, RenderDirection, Row as TableRow, Sparkline, Table, TableState, Tabs,
+    Wrap,
+};
 
 use super::app::{App, Focus, SharesStatus, Tab};
 use super::buddies::Known;
 use super::chat::ChatInput;
 use super::input::TextInput;
 use super::results::{FormatFilter, Results, Row};
-use super::settings::Item;
-use super::transfers::{Summary, Transfer, TransferRow};
+use super::settings::{Item, Settings};
+use super::transfers::{Summary, Transfer, TransferRow, Transfers};
 use crate::config::{self, display_path};
 use crate::search::{human_size, quality};
 use unicode_width::UnicodeWidthStr;
@@ -464,9 +467,23 @@ fn result_row(
     }
 }
 
+/// Narrower than this, the speed graph would crowd the details out.
+const SPEED_GRAPH_MIN_WIDTH: u16 = 60;
+
 fn render_transfers(frame: &mut Frame, app: &mut App, area: Rect) {
-    let [list_area, detail_area] =
-        Layout::vertical([Constraint::Min(1), Constraint::Length(4)]).areas(area);
+    let graph = app.settings.speed_graph && area.width >= SPEED_GRAPH_MIN_WIDTH;
+    let [list_area, bottom_area] = Layout::vertical([
+        Constraint::Min(1),
+        Constraint::Length(if graph { 6 } else { 4 }),
+    ])
+    .areas(area);
+    let (detail_area, graph_area) = if graph {
+        let [detail, graph] = Layout::horizontal([Constraint::Fill(1), Constraint::Percentage(45)])
+            .areas(bottom_area);
+        (detail, Some(graph))
+    } else {
+        (bottom_area, None)
+    };
 
     let block = Block::bordered()
         .title(" Downloads ")
@@ -607,6 +624,37 @@ fn render_transfers(frame: &mut Frame, app: &mut App, area: Rect) {
     frame.render_widget(
         Paragraph::new(detail).block(Block::bordered().border_style(Style::new().dark_gray())),
         detail_area,
+    );
+    if let Some(area) = graph_area {
+        render_speed_graph(frame, &app.transfers, area);
+    }
+}
+
+/// The total download speed of the last two minutes, newest on the right,
+/// scaled to the peak shown.
+fn render_speed_graph(frame: &mut Frame, transfers: &Transfers, area: Rect) {
+    let history = transfers.speed_history();
+    let shown: Vec<u64> = history
+        .iter()
+        .rev()
+        .take(usize::from(area.width.saturating_sub(2)))
+        .copied()
+        .collect();
+    let peak = shown.iter().copied().max().unwrap_or(0);
+    let now = history.back().copied().unwrap_or(0);
+    let title = format!(" {}/s now · peak {}/s ", human_size(now), human_size(peak));
+    frame.render_widget(
+        Sparkline::default()
+            .block(
+                Block::bordered()
+                    .border_style(Style::new().dark_gray())
+                    .title(Span::raw(title).cyan()),
+            )
+            .data(shown)
+            .max(peak.max(1))
+            .direction(RenderDirection::RightToLeft)
+            .style(Style::new().cyan()),
+        area,
     );
 }
 
@@ -1374,6 +1422,17 @@ fn render_settings(frame: &mut Frame, app: &mut App, area: Rect) {
         .dark_gray(),
     );
     lines.push(Line::default());
+    lines.push(Line::from("Speed graph").bold());
+    push_item(
+        &mut lines,
+        5,
+        Item::SpeedGraph,
+        format!(
+            "[{}] graph the download speed on the Downloads tab",
+            if s.speed_graph { "x" } else { " " }
+        ),
+    );
+    lines.push(Line::default());
     lines.push(Line::from("Distributed network").bold());
     lines.push(
         Line::from(match &app.distrib {
@@ -1409,11 +1468,16 @@ fn render_settings(frame: &mut Frame, app: &mut App, area: Rect) {
         .green(),
     );
     for (i, dir) in s.shared.iter().enumerate() {
-        push_item(&mut lines, i + 5, Item::Shared(i), display_path(dir));
+        push_item(
+            &mut lines,
+            Settings::shared_index(i),
+            Item::Shared(i),
+            display_path(dir),
+        );
     }
     push_item(
         &mut lines,
-        s.shared.len() + 5,
+        Settings::shared_index(s.shared.len()),
         Item::AddShared,
         "+ add folder".to_owned(),
     );

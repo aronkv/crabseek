@@ -1,7 +1,7 @@
 //! The download list shown on the Transfers tab.
 
 use std::cell::OnceCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use crabseek_net::{DownloadId, DownloadState};
@@ -15,6 +15,10 @@ const MIN_SAMPLE_GAP: Duration = Duration::from_millis(100);
 /// Progress arrives every 250 ms while data flows, so a longer silence
 /// means the transfer has stalled and the shown speed should fall.
 const STALL_AFTER: Duration = Duration::from_secs(1);
+
+/// Samples of the total speed kept for the graph, one per UI tick: two
+/// minutes at the usual 500 ms.
+const SPEED_HISTORY: usize = 240;
 
 /// Smoothed bytes-per-second from progress samples.
 #[derive(Default)]
@@ -153,6 +157,8 @@ pub struct Transfers {
     /// Removed from the list; a running one still reports its cancel,
     /// which must not bring the row back.
     removed: HashSet<DownloadId>,
+    /// Total download speed in bytes per second, oldest first.
+    speed_history: VecDeque<u64>,
 }
 
 impl Transfers {
@@ -196,11 +202,20 @@ impl Transfers {
         t.state = state;
     }
 
-    /// Lets the speeds of stalled transfers fall.
+    /// Lets the speeds of stalled transfers fall, and records the total
+    /// for the speed graph.
     pub fn tick(&mut self, now: Instant) {
         for t in &mut self.list {
             t.meter.decay(now);
         }
+        if self.speed_history.len() == SPEED_HISTORY {
+            self.speed_history.pop_front();
+        }
+        self.speed_history.push_back(self.total_speed() as u64);
+    }
+
+    pub fn speed_history(&self) -> &VecDeque<u64> {
+        &self.speed_history
     }
 
     /// The download under the cursor; `None` on a heading.
@@ -547,6 +562,16 @@ mod tests {
 
     fn queued() -> DownloadState {
         DownloadState::Queued { place: None }
+    }
+
+    #[test]
+    fn speed_history_keeps_the_last_two_minutes() {
+        let mut t = Transfers::default();
+        let now = Instant::now();
+        for _ in 0..SPEED_HISTORY + 10 {
+            t.tick(now);
+        }
+        assert_eq!(t.speed_history().len(), SPEED_HISTORY);
     }
 
     #[test]

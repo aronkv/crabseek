@@ -113,13 +113,15 @@ fn page(tab: Tab) -> Page {
                  crabseek again brings it back; Q or `crabseek stop` quits for good.",
                 "Desktop notifications (off by default): finished downloads (an album's \
                  files come as one notification), private messages and new wishlist results.",
+                "Speed graph (on by default): the Downloads tab graphs the total download \
+                 speed of the last two minutes next to the details.",
                 "Distributed network: crabseek joins the network-wide search tree, so searches \
                  reach your shares.",
             ],
             keys: &[
                 (
                     "Enter / Space",
-                    "edit a folder or the port; switch UPnP or notifications",
+                    "edit a folder or the port; switch an option on or off",
                 ),
                 ("Tab (while editing)", "complete a folder path"),
                 ("a / x", "add / remove a shared folder"),

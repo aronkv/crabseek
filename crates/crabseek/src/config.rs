@@ -40,6 +40,9 @@ pub struct Config {
     /// Keep running in the background after `q`; off unless turned on.
     #[serde(default)]
     pub background: bool,
+    /// The download speed graph on the Downloads tab.
+    #[serde(default = "default_speed_graph")]
+    pub speed_graph: bool,
 }
 
 impl Default for Config {
@@ -61,6 +64,10 @@ fn default_upload_slots() -> usize {
 }
 
 fn default_upnp() -> bool {
+    true
+}
+
+fn default_speed_graph() -> bool {
     true
 }
 
@@ -284,6 +291,12 @@ pub fn save_background(enabled: bool) -> anyhow::Result<()> {
 pub fn save_notifications(enabled: bool) -> anyhow::Result<()> {
     update(|table| {
         table.insert("notifications".into(), enabled.into());
+    })
+}
+
+pub fn save_speed_graph(enabled: bool) -> anyhow::Result<()> {
+    update(|table| {
+        table.insert("speed_graph".into(), enabled.into());
     })
 }
 

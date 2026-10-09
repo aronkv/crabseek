@@ -240,6 +240,7 @@ impl App {
             chats_path: None,
         };
         app.settings.notifications = cfg.notifications;
+        app.settings.speed_graph = cfg.speed_graph;
         app.settings.background = cfg.background;
         app.restore(saved);
         Ok(app)
@@ -918,6 +919,13 @@ impl App {
                     }
                 })
             }
+            SettingsAction::SetSpeedGraph(enabled) => config::save_speed_graph(enabled).map(|()| {
+                if enabled {
+                    "speed graph on".to_owned()
+                } else {
+                    "speed graph off".to_owned()
+                }
+            }),
             SettingsAction::SetUpnp(enabled) => config::save_upnp(enabled).map(|()| {
                 let _ = self.client.set_upnp(enabled);
                 if enabled {
