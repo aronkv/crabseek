@@ -414,20 +414,32 @@ pub async fn attach() -> anyhow::Result<()> {
         default_hook(info);
     }));
 
+    // Frames are read in their own task: `read_frame` is not cancel-safe,
+    // and a key event winning the select below would drop a half-read
+    // frame and leave the stream mid-frame.
+    let (frame_tx, mut frames) = mpsc::channel(16);
+    let reader = tokio::spawn(async move {
+        while let Ok(frame) = read_frame(&mut read).await {
+            if frame_tx.send(frame).await.is_err() {
+                break;
+            }
+        }
+    });
+
     let result: anyhow::Result<String> = async {
         send_control(&mut write, &Control::Hello { cols, rows }).await?;
         let mut events = EventStream::new();
         let mut stdout = tokio::io::stdout();
         loop {
             tokio::select! {
-                frame = read_frame(&mut read) => match frame {
-                    Ok((TAG_OUTPUT, bytes)) => {
+                frame = frames.recv() => match frame {
+                    Some((TAG_OUTPUT, bytes)) => {
                         stdout.write_all(&bytes).await?;
                         stdout.flush().await?;
                     }
-                    Ok((TAG_BYE, reason)) => return Ok(String::from_utf8_lossy(&reason).into_owned()),
-                    Ok(_) => {}
-                    Err(_) => return Ok("crabseek stopped".to_owned()),
+                    Some((TAG_BYE, reason)) => return Ok(String::from_utf8_lossy(&reason).into_owned()),
+                    Some(_) => {}
+                    None => return Ok("crabseek stopped".to_owned()),
                 },
                 event = events.next() => match event {
                     Some(Ok(event @ (TermEvent::Key(_) | TermEvent::Resize(..)))) => {
@@ -441,6 +453,7 @@ pub async fn attach() -> anyhow::Result<()> {
         }
     }
     .await;
+    reader.abort();
     restore();
     let reason = result?;
     match reason.as_str() {
