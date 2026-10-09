@@ -273,7 +273,8 @@ impl Results {
     /// Adds the files of `files` that folder `id` does not list yet.
     fn merge(&mut self, id: FolderId, mut files: Vec<SearchFile>) {
         let folder = &self.folders[id];
-        files.retain(|f| !folder.files.iter().any(|g| g.filename == f.filename));
+        let known: HashSet<&str> = folder.files.iter().map(|f| f.filename.as_str()).collect();
+        files.retain(|f| !known.contains(f.filename.as_str()));
         if files.is_empty() {
             return;
         }
