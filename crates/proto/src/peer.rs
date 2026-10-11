@@ -37,6 +37,10 @@ pub enum TransferDirection {
 pub enum PeerMsg {
     SharedFileListRequest,
     SharedFileListResponse(SharedFileList),
+    /// A `SharedFileListResponse` whose body is already compressed (see
+    /// [`SharedFileList::encode_compressed`]), so one list can be sent to
+    /// many peers. Only sent; decoding yields `SharedFileListResponse`.
+    SharedFileListCompressed(Bytes),
     FolderContentsRequest {
         token: u32,
         folder: String,
@@ -103,6 +107,10 @@ impl PeerMsg {
             Self::SharedFileListResponse(list) => {
                 b.put_u32_le(code::SHARED_FILE_LIST_RESPONSE);
                 list.encode_compressed(b);
+            }
+            Self::SharedFileListCompressed(body) => {
+                b.put_u32_le(code::SHARED_FILE_LIST_RESPONSE);
+                b.put_slice(body);
             }
             Self::FolderContentsRequest { token, folder } => {
                 b.put_u32_le(code::FOLDER_CONTENTS_REQUEST);
@@ -410,6 +418,19 @@ mod tests {
             folder: "Music\\A".into(),
             dirs: vec![],
         }));
+    }
+
+    #[test]
+    fn precompressed_file_list_decodes_as_a_response() {
+        let list = SharedFileList::default();
+        let mut body = BytesMut::new();
+        list.encode_compressed(&mut body);
+        let mut buf = BytesMut::new();
+        PeerMsg::SharedFileListCompressed(body.freeze()).encode(&mut buf);
+        assert_eq!(
+            PeerMsg::decode(buf.freeze().slice(4..)),
+            Ok(PeerMsg::SharedFileListResponse(list))
+        );
     }
 
     #[test]

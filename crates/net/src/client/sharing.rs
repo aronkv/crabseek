@@ -128,7 +128,7 @@ impl Actor {
         let shares = Arc::clone(&self.shares);
         let build: Box<dyn FnOnce() -> PeerMsg + Send> = match msg {
             PeerMsg::SharedFileListRequest => {
-                Box::new(move || PeerMsg::SharedFileListResponse(shares.file_list()))
+                Box::new(move || PeerMsg::SharedFileListCompressed(shares.compressed_file_list()))
             }
             PeerMsg::FolderContentsRequest { token, folder } => Box::new(move || {
                 let dirs = shares.folder_contents(&folder);

@@ -9,8 +9,10 @@
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::UNIX_EPOCH;
 
+use bytes::{Bytes, BytesMut};
 use crabseek_proto::search::{SearchFile, attr};
 use crabseek_proto::shares::{SharedDirectory, SharedFileList};
 use lofty::config::ParseOptions;
@@ -76,6 +78,8 @@ pub struct ShareIndex {
     files: Vec<SharedFile>,
     by_path: HashMap<String, usize>,
     folders: usize,
+    /// [`Self::file_list`], compressed once for every browse request.
+    compressed_list: OnceLock<Bytes>,
 }
 
 /// Cached audio properties, keyed by local path.
@@ -276,6 +280,19 @@ impl ShareIndex {
         }
     }
 
+    /// [`Self::file_list`] as a compressed `SharedFileListResponse` body.
+    /// Built on the first browse and reused until the next scan replaces
+    /// the index.
+    pub fn compressed_file_list(&self) -> Bytes {
+        self.compressed_list
+            .get_or_init(|| {
+                let mut body = BytesMut::new();
+                self.file_list().encode_compressed(&mut body);
+                body.freeze()
+            })
+            .clone()
+    }
+
     /// `folder` and its subfolders, for `FolderContentsResponse`.
     pub fn folder_contents(&self, folder: &str) -> Vec<SharedDirectory> {
         let prefix = format!("{folder}\\");
@@ -424,6 +441,10 @@ mod tests {
                 .iter()
                 .all(|d| d.files.iter().all(|f| !f.filename.contains('\\')))
         );
+        let compressed = index.compressed_file_list();
+        assert_eq!(SharedFileList::decode_compressed(&compressed), Ok(list));
+        // Built once: later requests get the same buffer.
+        assert_eq!(index.compressed_file_list().as_ptr(), compressed.as_ptr());
         let contents = index.folder_contents("Music\\Boards of Canada\\Geogaddi");
         assert_eq!(contents.len(), 2); // the folder and its Scans subfolder
         std::fs::remove_dir_all(root).unwrap();
