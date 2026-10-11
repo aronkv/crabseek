@@ -61,6 +61,9 @@ const MAX_RETIRED: usize = 64;
 /// only means we do not answer them.
 const MAX_SEARCHES_IN_FLIGHT: usize = 16;
 
+/// Pause after a failed accept before trying again.
+const ACCEPT_RETRY: Duration = Duration::from_secs(1);
+
 /// The spec allows at most one `ServerPing` a minute.
 const PING_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -1297,7 +1300,11 @@ async fn accept_loop(listener: TcpListener, tx: mpsc::UnboundedSender<Internal>)
         let (mut stream, addr) = match listener.accept().await {
             Ok(conn) => conn,
             Err(e) => {
+                // Out of file descriptors, accept fails until one is
+                // closed; retrying at once would spin the CPU. Waiting
+                // connections stay in the kernel's backlog meanwhile.
                 tracing::warn!(%e, "accept failed");
+                tokio::time::sleep(ACCEPT_RETRY).await;
                 continue;
             }
         };
