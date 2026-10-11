@@ -461,7 +461,16 @@ async fn upload_and_resume(name: &str, firewalled: &[&str]) {
     .unwrap();
 
     let id = bob.download("alice", remote).unwrap();
+    let mut first_received = None;
     let path = wait_for(&mut bob_events, |e| match e {
+        Event::Download {
+            id: got,
+            state: DownloadState::Transferring { received, .. },
+            ..
+        } if got == id => {
+            first_received.get_or_insert(received);
+            None
+        }
         Event::Download {
             id: got,
             state: DownloadState::Completed { path },
@@ -476,6 +485,9 @@ async fn upload_and_resume(name: &str, firewalled: &[&str]) {
     .await;
     assert_eq!(path, target);
     assert_eq!(std::fs::read(&path).unwrap(), data);
+    // Progress starts at the resume point: a first report of 0 would make
+    // the part file count as freshly received and inflate the speed.
+    assert_eq!(first_received, Some(1_000_000));
 
     // Alice saw the upload through to the end.
     wait_for(&mut alice_events, |e| match e {

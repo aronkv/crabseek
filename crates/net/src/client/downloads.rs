@@ -275,12 +275,15 @@ impl Actor {
             let _ = tx.send(Internal::DownloadDone { id, result });
         });
         self.downloads.get_mut(&id).unwrap().task = Some(task.abort_handle());
-        self.set_state(id, DownloadState::Transferring { received: 0, size });
     }
 
+    /// The first report carries the resume offset and starts the
+    /// transfer, so progress never jumps from 0 to what was already on
+    /// disk.
     pub(super) fn on_download_progress(&mut self, id: DownloadId, received: u64) {
         if let Some(d) = self.downloads.get(&id)
-            && let DownloadState::Transferring { size, .. } = d.state
+            && d.task.is_some()
+            && let Some((_, size)) = d.transfer
         {
             self.set_state(id, DownloadState::Transferring { received, size });
         }
