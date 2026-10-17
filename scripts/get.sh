@@ -4,7 +4,7 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/aronkv/crabseek/main/scripts/get.sh | sh
 #
-# Options (after `sh -s --`): --version 0.3.0, --uninstall.
+# Options (after `sh -s --`): --version 0.3.1, --uninstall.
 # Environment: PREFIX (default ~/.local).
 set -eu
 
